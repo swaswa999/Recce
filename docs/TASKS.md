@@ -9,24 +9,23 @@ see [MVP-PLAN.md](MVP-PLAN.md). The roadmap phases below map to plan phases A–
 
 ## In progress
 
-- **Phase 1 — Audio validation.** Generate a callout audio track timed to a
-  recorded GPS trace, then ride it on a road I know. Tests both callout accuracy
-  and rider distraction, cheaply, before any app exists.
+- **Phase B — Fix the tightening-corner underestimate** with per-segment arc
+  fitting. Smoothing under-reads rapidly tightening corners (64.2 m measured vs
+  50 m designed), which rates borderline corners one band optimistic — the wrong
+  direction for a safety tool. The failing case is already pinned as a strict
+  `xfail` in `tests/test_severity_bias.py`; removing that marker is the
+  definition of done.
 
 ## Todo
 
-Immediate (the next three actions):
-
-1. **Recover the Phase 0 engine.** `pacenote-engine.zip` is not in this repo and
-   not on this laptop. Find it and commit it to `src/engine/`, or rebuild from the
-   pipeline description in [ARCHITECTURE.md](ARCHITECTURE.md).
-2. **Run `fetch_osm.py` + `run_real.py` on a road I know well** and judge whether
+1. **Run `fetch_osm.py` + `run_real.py` on a road I know well** and judge whether
    the severity bands match reality. Needs a machine with open internet for the
    Overpass fetch.
-3. **Fix the tightening-corner underestimate** with per-segment arc fitting.
-   Smoothing currently under-reads rapidly tightening corners (64 m measured vs
-   50 m designed), rating borderline corners one band optimistic — the wrong
-   direction for a safety tool.
+2. **Phase D — Audio validation.** Generate a callout audio track timed to a
+   recorded GPS trace, then ride it on a road I know. Tests callout accuracy and
+   rider distraction cheaply, before any app exists.
+3. **Add a second synthetic stress road** targeting decreasing-radius corners
+   specifically, so arc fitting is validated on more than one case.
 
 Later phases:
 
@@ -52,7 +51,10 @@ Unscheduled:
 
 ## Done
 
+- **Phase A — Engine in repo, answer key under test** (2026-07-27). Recovered the
+  engine from `~/Desktop/pacenotes/` into `src/engine/`, encoded all 7 answer-key
+  features as assertions in `tests/`, and added the optimistic-bias invariants.
+  22 passed, 1 strict xfail (the Phase B bug).
 - **Phase 0 — Pacenote engine (Python, laptop).** Built and validated July 2026.
   7/7 designed features recovered against a synthetic canyon road with an answer
-  key. One known limitation carried forward as todo #3. Details in
-  [ARCHITECTURE.md](ARCHITECTURE.md).
+  key. Details in [ARCHITECTURE.md](ARCHITECTURE.md).

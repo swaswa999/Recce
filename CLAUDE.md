@@ -14,23 +14,28 @@ reconnaissance runs where rally crews write their notes.
 
 ## Current state
 
-Fresh scaffold — **no application code committed yet.** A Phase 0 pacenote engine
-was built and validated in Python, but it lives in an off-machine
-`pacenote-engine.zip`. Recovering it is task #1 in TASKS.md.
+The Phase 0 pacenote engine is in `src/engine/`, with its answer key encoded as a
+test suite in `tests/`. 22 tests pass; 1 is a strict `xfail` marking the known
+smoothing bug.
 
-Active phase: **Phase 1 — audio validation** (callout track timed to a recorded GPS
-trace, ridden on a known road).
+Active phase: **Phase B — fix the severity underestimate** (per-segment arc fitting).
+See [docs/MVP-PLAN.md](docs/MVP-PLAN.md).
 
 ## Working conventions
 
-Not yet established — the repo has no code. Set these when the engine lands:
+- Install: `pip install numpy pytest`
+- Test: `python3 -m pytest` (from repo root)
+- Demo: `cd src/engine && python3 run_demo.py` — synthetic road, ground truth vs
+  engine output
+- Real road: `python3 fetch_osm.py <name> <bbox>` then `python3 run_real.py road.json`
+  (Overpass fetch needs open internet)
+- Lint/typecheck: not set up yet
 
-- Install: `TODO`
-- Run: `TODO`
-- Test: `TODO`
-- Lint/typecheck: `TODO`
+Layout: `src/engine/` (Python pacenote engine), `tests/` (answer key + bias
+invariants), `src/ios/` (Swift app, not started).
 
-Planned layout: `src/engine/` (Python pacenote engine), `src/ios/` (Swift app).
+The engine modules use flat imports, so `run_demo.py` runs from inside
+`src/engine/`. `pytest.ini` puts that directory on the path for tests.
 
 ## Rules
 
@@ -54,7 +59,9 @@ General:
 
 ## Agent workflow
 
-Role-specific subagents live in `.claude/agents/`. All run on Sonnet.
+Role-specific subagents live in `.claude/agents/`. All run on Sonnet except
+`severity-bias-reviewer`, which runs on Opus — it's the check whose miss is most
+expensive.
 
 **Core loop**
 

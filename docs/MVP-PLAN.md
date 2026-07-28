@@ -30,29 +30,21 @@ that. Where the pipeline is uncertain, it rounds toward the harder band.
 
 ---
 
-## Phase A — Restore the engine and put it under test
+## Phase A — Restore the engine and put it under test ✅ done
 
-The Phase 0 engine was built and validated, but `pacenote-engine.zip` is not in this
-repo and not on this machine. Right now there is nothing to build on.
+Engine recovered from `~/Desktop/pacenotes/` and committed to `src/engine/`
+(all 7 modules). Answer key encoded as `tests/`.
 
-**Work**
+**Acceptance criteria — all met**
 
-1. Locate the zip, or rebuild from the pipeline spec in
-   [ARCHITECTURE.md](ARCHITECTURE.md). Commit to `src/engine/`.
-2. Encode the synthetic road's answer key as an actual test suite, not prose. The
-   7 validated features become 7 assertions.
-3. Add the **optimistic-bias invariant** as a permanent test: for every corner in
-   the answer key, measured severity ≤ designed severity in difficulty terms.
+- ✅ `python3 -m pytest` runs green from the repo root.
+- ✅ All 7 answer-key features asserted by the suite, not by reading demo output.
+- ✅ The bias invariant exists and the tightening corner is visible as a **strict
+  `xfail`** — the suite stays green while the known bug stays legible in the
+  output. `strict=True` means that when arc fitting lands, the test XPASSes and
+  pytest turns that into a failure, forcing the marker off and locking the fix in.
 
-**Acceptance criteria**
-
-- `pytest` runs green from a single documented command.
-- The 7/7 answer-key features are recovered *by the test suite*, not by reading
-  output.
-- The bias invariant test exists and currently **fails** on the tightening corner —
-  that failure is the Phase B ticket, and it should be visible, not hidden.
-
-**Agents:** planner → builder → tester → synthetic-road-validator
+**Result:** 22 passed, 1 xfailed.
 
 ---
 
