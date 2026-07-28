@@ -6,6 +6,11 @@ venv/
 .DS_Store
 .obsidian/
 
+# Symlink to Claude Code's memory dir so Obsidian can see it.
+# Machine-specific path — recreate with:
+#   ln -s ~/.claude/projects/-Users-SwayamS-Desktop-Projects-Recce/memory ./memory
+/memory
+
 # Rendered callout tracks
 *.wav
 *.aiff
