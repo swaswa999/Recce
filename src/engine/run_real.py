@@ -7,7 +7,8 @@ import json
 import sys
 import numpy as np
 
-from geometry import lonlat_to_xy, node_spacing_stats
+from geometry import (lonlat_to_xy, node_spacing_stats, elevation_quality,
+                      resample, SEG_SPACING)
 from pipeline import analyze_to_script
 
 # Below this node density the geometry cannot support trustworthy pacenotes:
@@ -28,6 +29,12 @@ from pipeline import analyze_to_script
 # docs/ARCHITECTURE.md, "The information limit".
 MAX_TRUSTED_MEDIAN_SPACING = 12.0
 
+# The median alone is not enough. The Tail of the Dragon has a 9.7 m median —
+# comfortably inside the gate — while 40% of its gaps exceed 12 m, p90 is 30 m
+# and the largest is 176 m. A road can pass on its median and still be
+# untrustworthy across a large fraction of its length.
+MAX_TRUSTED_P90_SPACING = 25.0
+
 
 def main(path, force=False):
     with open(path) as f:
@@ -39,7 +46,37 @@ def main(path, force=False):
     x, y = lonlat_to_xy(lon, lat)
 
     med, p90, mx = node_spacing_stats(x, y)
-    print(f"node spacing: median {med:.1f} m, p90 {p90:.1f} m, max {mx:.1f} m")
+    frac_coarse = float(np.mean(np.hypot(np.diff(x), np.diff(y))
+                                > MAX_TRUSTED_MEDIAN_SPACING))
+    print(f"node spacing: median {med:.1f} m, p90 {p90:.1f} m, max {mx:.1f} m "
+          f"({frac_coarse:.0%} of gaps over {MAX_TRUSTED_MEDIAN_SPACING:.0f} m)")
+
+    # Elevation fitness decides whether crest callouts are emitted at all.
+    trust_elevation = True
+    if ele is not None:
+        _, _, _, zi = resample(x, y, ele, spacing=SEG_SPACING)
+        quantum, p95, verdict = elevation_quality(ele, zi, SEG_SPACING)
+        print(f"elevation: {quantum:.2f} m resolution, p95 gradient {p95:.0%} "
+              f"-> {verdict}")
+        if verdict != "ok":
+            trust_elevation = False
+            print("\n*** DEGRADED: crest detection SUPPRESSED on this road.")
+            print(f"*** {verdict}.")
+            print("*** Corner severity and shape are still usable; 'over crest'")
+            print("*** and 'don't cut' are not. Emitting them anyway buries the")
+            print("*** real crests among false ones, which is worse than silence.")
+            print("*** Needs a better DEM (SRTM tiles read directly, or LIDAR)")
+            print("*** than a point-lookup elevation API.\n")
+    else:
+        trust_elevation = False
+        print("elevation: absent -> crest warnings will not be emitted")
+
+    if p90 > MAX_TRUSTED_P90_SPACING:
+        print(f"\n*** WARNING: p90 node spacing {p90:.1f} m exceeds "
+              f"{MAX_TRUSTED_P90_SPACING:.0f} m.")
+        print("*** The median passes but a large fraction of this road is too")
+        print("*** sparse to trust. Severity on those stretches is unreliable.\n")
+
     if med > MAX_TRUSTED_MEDIAN_SPACING:
         # Refuse, don't warn. A printed warning above a full pacenote script
         # gets scrolled past, and the output looks authoritative either way.
@@ -57,8 +94,10 @@ def main(path, force=False):
         print(msg)
         print(">>> --force given: output below is UNTRUSTWORTHY <<<\n")
 
-    s, corners, loose, events, script = analyze_to_script(x, y, ele)
-    print(f"\nPACENOTES: {road.get('name', path)}\n")
+    s, corners, loose, events, script = analyze_to_script(
+        x, y, ele if trust_elevation else None)
+    print(f"\nPACENOTES: {road.get('name', path)}"
+          f"{'' if trust_elevation else '  [no crest data]'}\n")
     print(script)
 
     # fun-density score: corners per km weighted by severity. Reused later as

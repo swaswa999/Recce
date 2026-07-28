@@ -184,6 +184,52 @@ def confined_arc_profile(x, y, spacing, seed, lo, hi, frac=0.12,
     return out
 
 
+# Steepest sustained gradient a built road plausibly has. Public mountain roads
+# top out around 15%; anything above this in a p95 statistic means the elevation
+# profile is dominated by sampling error, not road.
+MAX_PLAUSIBLE_GRADE_P95 = 0.20
+# Vertical resolution needed for crest detection. Crests are called from a grade
+# CHANGE of 0.05 across ~30 m, so a quantization step of 1 m produces a spurious
+# 0.033 grade swing on its own — the same order as the signal.
+MAX_ELEVATION_QUANTUM = 0.5
+
+
+def elevation_quality(z_raw, z_grid, spacing):
+    """Is this elevation profile fit for crest detection?
+
+    Returns (quantum, p95_grade, verdict) where verdict is "ok" or a reason
+    string. Crest warnings must be SUPPRESSED, not merely doubted, when this
+    fails: a blind crest that generates no callout is a silent missing warning,
+    but a hundred false crests are worse — they bury the real ones and teach the
+    rider to ignore the channel entirely.
+
+    Measured on the Tail of the Dragon via Open-Elevation: integer-metre steps
+    and a p95 gradient of 1.26 (126%), which produced "over crest don't cut" on
+    28% of corners. SRTM at 30 m resolution sampled along a switchbacking road
+    lands adjacent road points in different terrain cells.
+
+    `z_raw` is the elevation as delivered, `z_grid` the resampled profile.
+    Quantum MUST come from the raw values — resampling interpolates between
+    them, so the grid's smallest step reflects the resample spacing rather than
+    the source's vertical resolution and reads as a reassuring 0.00 m.
+    """
+    steps = np.abs(np.diff(np.asarray(z_raw, dtype=float)))
+    nonzero = steps[steps > 1e-9]
+    quantum = float(np.min(nonzero)) if len(nonzero) else 0.0
+    grade = np.gradient(np.asarray(z_grid, dtype=float), spacing)
+    p95 = float(np.percentile(np.abs(grade), 95))
+
+    if p95 > MAX_PLAUSIBLE_GRADE_P95:
+        return quantum, p95, (
+            f"p95 gradient {p95:.0%} exceeds the {MAX_PLAUSIBLE_GRADE_P95:.0%} "
+            f"plausible maximum — profile is sampling error, not road")
+    if quantum > MAX_ELEVATION_QUANTUM:
+        return quantum, p95, (
+            f"vertical resolution {quantum:.2f} m is coarser than the "
+            f"{MAX_ELEVATION_QUANTUM} m needed to resolve a crest")
+    return quantum, p95, "ok"
+
+
 def node_spacing_stats(x, y):
     """Spacing of the RAW input nodes, before any resampling.
 

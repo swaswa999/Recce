@@ -19,23 +19,26 @@ see [MVP-PLAN.md](MVP-PLAN.md). The roadmap phases below map to plan phases A–
    the real Phase D gate.
 2. **Feed a recorded GPS trace into the timing engine.** Timing is currently
    validated against a *modelled* speed profile, not a real ride.
-3. **Run `fetch_osm.py` + `run_real.py` on a road I know well** and judge whether
-   the severity bands match reality. Needs a machine with open internet for the
-   Overpass fetch. Note `run_real.py` now refuses roads above 12 m median node
-   spacing — expect some real roads to be rejected.
-4. **Calibrate `MAX_TRUSTED_MEDIAN_SPACING` on real OSM geometry.** It is 12 m,
-   measured on one synthetic road. Provisional until Phase C.
-5. **Elevation on the stress road.** `synth_stress.py` deliberately has no
+3. **Judge the severity bands on a road I know.** The Tail of the Dragon now
+   runs end to end (260 corners over 34.8 km, 7.5/km), but I can't tell whether
+   band 3 vs 4 matches how it actually rides. This needs someone who knows a road.
+4. **Get a real DEM.** Open-Elevation is unfit for crest detection — crest
+   callouts are currently suppressed on real roads entirely. Options: read SRTM
+   tiles directly with bilinear interpolation, 1 m LIDAR where available, or
+   barometric altitude from recorded rides.
+5. **Calibrate the spacing thresholds on more real roads.** 12 m median / 25 m p90,
+   measured on one synthetic road and sanity-checked on one real one.
+6. **Elevation on the stress road.** `synth_stress.py` deliberately has no
    crests, so crest detection and "don't cut" are still only tested by the
    answer-key road.
-6. **Geometry classes neither test road covers.** Both roads are clean, isolated
+7. **Geometry classes neither test road covers.** Both roads are clean, isolated
    corners separated by long straights. Untested: switchbacks with no straight
    between them, corners shorter than the fit window, compound corners that
    tighten *then* open, off-camber/banked sections, junctions and forks, doubling-
    back geometry where the road nearly touches itself, and very long constant
    sweepers. Neither road discriminates the new estimator from the old on radius
    accuracy — only the decimated-geometry tests do that.
-7. **Finish the third `severity-bias-reviewer` pass.** Rounds 1 and 2 returned
+8. **Finish the third `severity-bias-reviewer` pass.** Rounds 1 and 2 returned
    BLOCKING and were addressed; round 3 was cut off by an API spend limit before
    giving a verdict. Its one partial finding (the stress road doesn't discriminate)
    was verified and folded in. Phase B has no clean verdict on record.
@@ -59,9 +62,10 @@ Unscheduled:
 
 ## Blocked
 
-- Real-road validation — blocked on a machine with open internet for the Overpass
-  API fetch.
-- The two remaining Phase D gates need a bike and a road, not code.
+- ~~Real-road validation — blocked on open internet.~~ **Never actually blocked.**
+  `fetch_osm.py` claimed the sandbox blocked Overpass; the real cause was a 406
+  from posting the query as `text/plain` with urllib's default User-Agent. Fixed.
+- The remaining Phase D gates need a bike and a road, not code.
 
 ## Done
 
