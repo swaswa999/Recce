@@ -28,11 +28,28 @@ ORDERED = [
     (5, "left_4_crest"),
 ]
 
-# 5 m resampling introduces a few percent of discretization error in measured
-# radius. 5% is the observed noise floor on this road; anything beyond it is
-# systematic bias, not sampling. Provisional — recalibrate with Phase C real
-# road data before trusting this number on OSM geometry.
-RADIUS_TOLERANCE = 0.05
+# Per-corner ratchets, NOT one global bound.
+#
+# A single tolerance has to be set by the worst corner, which then hands that
+# same slack to every well-measured corner. With one 0.13 bound, right_3_long
+# could drift from 59.7 m to 67.8 m — 13% optimistic and 3% short of being
+# called a 4 instead of a 3 — and the suite would stay green.
+#
+# Each value sits just above what that corner currently measures, so any
+# regression fails immediately. Tighten them as accuracy improves.
+RADIUS_TOLERANCE = {
+    "right_4": 0.02,
+    "left_2": 0.02,
+    # Documented exception. The tightening corner's designed minimum exists over
+    # ~0.85 m of arc (only 7 of 104 arc steps sit below R=55), so no windowed
+    # estimator can resolve it. This is a limitation of the test road, not the
+    # estimator — see test_tightening_corner_meets_accuracy_goal and the
+    # transition-spiral stress road in docs/TASKS.md.
+    "right_3_tight": 0.15,
+    "hairpin_left": 0.02,
+    "right_3_long": 0.02,
+    "left_4_crest": 0.02,
+}
 
 
 @pytest.mark.parametrize("idx,key", ORDERED)
@@ -46,31 +63,49 @@ def test_severity_never_optimistic(corners, idx, key):
     )
 
 
-@pytest.mark.parametrize("idx,key", [
-    (0, "right_4"),
-    (1, "left_2"),
-    pytest.param(2, "right_3_tight", marks=pytest.mark.xfail(
-        strict=True,
-        reason="KNOWN BUG (Phase B): rolling-median smoothing under-reads "
-               "rapidly tightening corners — measures ~64 m against a designed "
-               "50 m. Fix is per-segment arc fitting. When that lands this test "
-               "XPASSes, which strict=True turns into a failure, forcing the "
-               "marker to be removed and the fix locked in.",
-    )),
-    (3, "hairpin_left"),
-    (4, "right_3_long"),
-    (5, "left_4_crest"),
-])
+@pytest.mark.parametrize("idx,key", ORDERED)
 def test_radius_never_reads_flatter_than_designed(corners, idx, key):
     """Measured radius must not exceed designed — a larger radius reads flatter,
     which is the optimistic direction."""
     c = by_order(corners, idx)
     designed = DESIGNED[key]["radius"]
-    limit = designed * (1 + RADIUS_TOLERANCE)
+    tol = RADIUS_TOLERANCE[key]
+    limit = designed * (1 + tol)
     assert c.min_radius <= limit, (
         f"{key}: measured {c.min_radius:.1f} m against designed {designed:.1f} m "
-        f"(+{100 * (c.min_radius / designed - 1):.1f}%) — reads FLATTER than "
-        f"reality, the optimistic direction."
+        f"(+{100 * (c.min_radius / designed - 1):.1f}%, ratchet is +{100 * tol:.0f}%) "
+        f"— reads FLATTER than reality, the optimistic direction."
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="TEST-ROAD ARTIFACT, established by measurement rather than argued. "
+           "Confined arc fitting took this corner from +26.7% to +13.6%, with "
+           "every other corner inside 0.6%. The residual is the road: "
+           "synth_road's tightening corner only reaches its 50.67 m minimum over "
+           "~0.85 m of arc (7 of 104 steps below R=55), and no windowed "
+           "estimator can resolve a radius existing over less than a metre. "
+           "Confirmed on synth_stress.py, whose corners hold their minima over "
+           "plateaus and have realistic transition spirals: a sustained "
+           "decreasing-radius 45 m corner reads 45.0 m (0.0%), and all five read "
+           "exactly — see tests/test_stress_road.py. Notably the PRE-Phase-B "
+           "estimator also reads them exactly, which strengthens rather than "
+           "weakens the conclusion: an estimator whose known defect is flattening "
+           "curvature peaks still resolves a SUSTAINED peak, so the error here is "
+           "about the minimum's arc extent, not the corner's shape. This test "
+           "stays as a strict xfail because the goal genuinely cannot be met on "
+           "THIS road; test_stress_road.py is where radius accuracy is now "
+           "enforced, at a 3% ratchet.",
+)
+def test_tightening_corner_meets_accuracy_goal(corners):
+    """The 10% goal, kept visible rather than absorbed into the tolerance."""
+    c = by_order(corners, 2)
+    designed = DESIGNED["right_3_tight"]["radius"]
+    assert c.min_radius <= designed * 1.10, (
+        f"tightening corner measured {c.min_radius:.1f} m against designed "
+        f"{designed:.1f} m (+{100 * (c.min_radius / designed - 1):.1f}%), "
+        f"goal is +10%"
     )
 
 

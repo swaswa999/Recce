@@ -9,10 +9,16 @@ Designed values come from synth_road.build_road() — keep them in sync.
 import pytest
 
 # Designed geometry, straight from synth_road.build_road().
+#
+# right_3_tight is 50.67 m, not the nominal 50 m the arc() call asks for.
+# arc() steps radius linearly by k/n over n steps, so the tightest step lands
+# at r0 + (r1-r0)*(n-1)/n = 120 - 70*(103/104) = 50.67. The road genuinely
+# never reaches 50 m. Asserting 50.0 was measuring the engine against geometry
+# that isn't there, and charged the estimator ~1.3% of error it didn't cause.
 DESIGNED = {
     "right_4":      {"direction": "R", "radius": 90.0, "severity": 4},
     "left_2":       {"direction": "L", "radius": 30.0, "severity": 2},
-    "right_3_tight": {"direction": "R", "radius": 50.0, "severity": 3},
+    "right_3_tight": {"direction": "R", "radius": 50.67, "severity": 3},
     "hairpin_left": {"direction": "L", "radius": 12.0, "severity": "hairpin"},
     "right_3_long": {"direction": "R", "radius": 60.0, "severity": 3},
     "left_4_crest": {"direction": "L", "radius": 80.0, "severity": 4},

@@ -9,23 +9,36 @@ see [MVP-PLAN.md](MVP-PLAN.md). The roadmap phases below map to plan phases A–
 
 ## In progress
 
-- **Phase B — Fix the tightening-corner underestimate** with per-segment arc
-  fitting. Smoothing under-reads rapidly tightening corners (64.2 m measured vs
-  50 m designed), which rates borderline corners one band optimistic — the wrong
-  direction for a safety tool. The failing case is already pinned as a strict
-  `xfail` in `tests/test_severity_bias.py`; removing that marker is the
-  definition of done.
+- **Phase B — awaiting final `severity-bias-reviewer` verdict.** Two BLOCKING
+  rounds so far, both legitimate; see MVP-PLAN.md for what each caught.
 
 ## Todo
 
-1. **Run `fetch_osm.py` + `run_real.py` on a road I know well** and judge whether
+1. **Ride the audio track.** `make_audio.py` produces a listenable WAV, but
+   "subjectively non-distracting at pace" cannot be tested at a desk. This is
+   the real Phase D gate.
+2. **Feed a recorded GPS trace into the timing engine.** Timing is currently
+   validated against a *modelled* speed profile, not a real ride.
+3. **Run `fetch_osm.py` + `run_real.py` on a road I know well** and judge whether
    the severity bands match reality. Needs a machine with open internet for the
-   Overpass fetch.
-2. **Phase D — Audio validation.** Generate a callout audio track timed to a
-   recorded GPS trace, then ride it on a road I know. Tests callout accuracy and
-   rider distraction cheaply, before any app exists.
-3. **Add a second synthetic stress road** targeting decreasing-radius corners
-   specifically, so arc fitting is validated on more than one case.
+   Overpass fetch. Note `run_real.py` now refuses roads above 12 m median node
+   spacing — expect some real roads to be rejected.
+4. **Calibrate `MAX_TRUSTED_MEDIAN_SPACING` on real OSM geometry.** It is 12 m,
+   measured on one synthetic road. Provisional until Phase C.
+5. **Elevation on the stress road.** `synth_stress.py` deliberately has no
+   crests, so crest detection and "don't cut" are still only tested by the
+   answer-key road.
+6. **Geometry classes neither test road covers.** Both roads are clean, isolated
+   corners separated by long straights. Untested: switchbacks with no straight
+   between them, corners shorter than the fit window, compound corners that
+   tighten *then* open, off-camber/banked sections, junctions and forks, doubling-
+   back geometry where the road nearly touches itself, and very long constant
+   sweepers. Neither road discriminates the new estimator from the old on radius
+   accuracy — only the decimated-geometry tests do that.
+7. **Finish the third `severity-bias-reviewer` pass.** Rounds 1 and 2 returned
+   BLOCKING and were addressed; round 3 was cut off by an API spend limit before
+   giving a verdict. Its one partial finding (the stress road doesn't discriminate)
+   was verified and folded in. Phase B has no clean verdict on record.
 
 Later phases:
 
@@ -46,8 +59,9 @@ Unscheduled:
 
 ## Blocked
 
-- Task 2 (real-road validation) — blocked on a machine with open internet for the
-  Overpass API fetch.
+- Real-road validation — blocked on a machine with open internet for the Overpass
+  API fetch.
+- The two remaining Phase D gates need a bike and a road, not code.
 
 ## Done
 

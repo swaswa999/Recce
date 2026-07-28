@@ -27,9 +27,15 @@ See [docs/MVP-PLAN.md](docs/MVP-PLAN.md).
 - Test: `python3 -m pytest` (from repo root)
 - Demo: `cd src/engine && python3 run_demo.py` — synthetic road, ground truth vs
   engine output
+- Audio: `cd src/engine && python3 make_audio.py -o ~/Desktop/ride.wav` — renders a
+  listenable timed callout track. `--no-audio` prints the schedule only;
+  `--mode guardian` for minimal verbosity.
 - Real road: `python3 fetch_osm.py <name> <bbox>` then `python3 run_real.py road.json`
   (Overpass fetch needs open internet)
 - Lint/typecheck: not set up yet
+
+Pipeline entry point is `pipeline.analyze()` — the demo, `run_real.py`, `make_audio.py`
+and the tests all call it, so they can't validate different pipelines.
 
 Layout: `src/engine/` (Python pacenote engine), `tests/` (answer key + bias
 invariants), `src/ios/` (Swift app, not started).

@@ -2,6 +2,8 @@
 import numpy as np
 from dataclasses import dataclass, field
 
+from geometry import confined_arc_profile
+
 # Radius (m) -> severity. Rally convention: 6 = fastest, 1 = slowest, plus hairpin.
 # Tuned for road riding; these thresholds are THE tuning knobs.
 SEVERITY_BANDS = [
@@ -21,6 +23,10 @@ LONG_CORNER = 130.0       # arc length for "long" modifier
 TIGHTEN_RATIO = 0.72      # last-third radius < ratio * first-third => tightens
 CREST_GRADE_DELTA = 0.05  # grade change across a local max to call a crest
 CREST_WIN = 30.0          # meters each side of candidate crest
+# Metres trimmed from each end of a refined profile before comparing shape.
+# Matches confined_arc_profile's min_half: those windows are one-sided and
+# systematically biased. See add_shape_modifiers.
+EDGE_MARGIN_M = 10.0
 
 
 @dataclass
@@ -34,6 +40,9 @@ class Corner:
     severity: object        # int 1-6 or 'hairpin'
     modifiers: list = field(default_factory=list)
     linked_to_next: bool = False
+    profile: object = None   # refined radius samples, set by refine_corners()
+    refined: bool = False    # False means we fell back to the coarse estimate
+    edge_margin: int = 0     # samples per end whose fit window is one-sided
 
     @property
     def length(self):
@@ -90,18 +99,84 @@ def find_corners(s, r_smooth):
     return out
 
 
-def add_shape_modifiers(corners, s, r_smooth):
-    """tightens / opens / long, based on radius profile through the corner."""
+def refine_corners(corners, s_seg, s_fine, x_fine, y_fine, spacing_fine,
+                   seed_fine):
+    """Re-measure each corner's radius on the fine grid, confined to the corner.
+
+    Segmentation on the coarse grid decides WHERE corners are; this decides how
+    tight they are. Splitting the two is deliberate: one estimator doing both
+    jobs either flattens tight corners (wide window) or fragments the road into
+    phantom corners with false modifiers (short window). Corner boundaries are
+    untouched here, so this can only change severity, never corner count.
+
+    Attaches `profile` (radius samples through the corner) for the modifier
+    pass, and re-derives min_radius and severity from it.
+
+    Sets `refined` so a silent fallback to the coarse (flattening) estimate is
+    observable rather than invisible, and `edge_margin` — the number of samples
+    at each end whose window is one-sided and therefore biased. See
+    add_shape_modifiers.
+    """
+    margin = max(1, int(round(EDGE_MARGIN_M / spacing_fine)))
     for c in corners:
-        seg = np.abs(r_smooth[c.i0:c.i1])
-        third = max(1, len(seg) // 3)
-        r_in = np.min(seg[:third])
-        r_out = np.min(seg[-third:])
-        if r_out < TIGHTEN_RATIO * r_in:
-            c.modifiers.append("tightens")
-        elif r_in < TIGHTEN_RATIO * r_out:
-            c.modifiers.append("opens")
-        if c.length > LONG_CORNER:
+        lo = int(np.searchsorted(s_fine, s_seg[c.i0], side="left"))
+        hi = int(np.searchsorted(s_fine, s_seg[c.i1 - 1], side="right"))
+        prof = confined_arc_profile(x_fine, y_fine, spacing_fine, seed_fine,
+                                    lo, hi)
+        prof = prof[np.isfinite(prof)]
+        if len(prof) == 0:
+            continue
+        min_r = float(np.min(prof))
+        sev = severity_of(min_r)
+        if sev is None:
+            # measured flatter than the corner threshold; keep the coarse
+            # result rather than silently dropping a corner
+            continue
+        c.profile = prof
+        c.edge_margin = margin
+        c.refined = True
+        c.min_radius = min_r
+        c.severity = sev
+    return corners
+
+
+def add_shape_modifiers(corners, s, r_smooth):
+    """tightens / opens / long, based on radius profile through the corner.
+
+    Uses the refined confined profile when refine_corners() has run, since the
+    coarse profile is flattened at the corner ends by boundary bleed and can
+    invert the tightens/opens comparison.
+
+    The profile ENDS are discarded before comparing. Confinement stops the fit
+    window leaving the corner, but that makes the outermost windows one-sided:
+    at the entry a window can only look forward into tighter geometry (reads low)
+    and at the exit only backward into flatter geometry (reads high). That biases
+    r_in down and r_out up — against emitting "tightens", and far enough to
+    invert into a false "opens" on a constant-radius corner. Measured: a
+    constant-radius 30 m arc reported "opens" at 12-13 m node spacing, and at
+    13 m the real hairpin reported "hairpin, opens" — the most dangerous string
+    this engine can produce.
+    """
+    for c in corners:
+        # `long` depends only on arc length, not the profile, so compute it here
+        # where no profile-shape guard can skip it — but append it LAST so the
+        # urgent shape word comes first: "right 3 tightens long", not
+        # "right 3 long tightens".
+        is_long = c.length > LONG_CORNER
+
+        seg = c.profile if c.profile is not None else np.abs(r_smooth[c.i0:c.i1])
+        margin = c.edge_margin if c.profile is not None else 0
+        if margin and len(seg) > 2 * margin + 6:
+            seg = seg[margin:-margin]
+        if len(seg) >= 6:
+            third = max(2, len(seg) // 3)
+            r_in = np.min(seg[:third])
+            r_out = np.min(seg[-third:])
+            if r_out < TIGHTEN_RATIO * r_in:
+                c.modifiers.append("tightens")
+            elif r_in < TIGHTEN_RATIO * r_out:
+                c.modifiers.append("opens")
+        if is_long:
             c.modifiers.append("long")
     return corners
 
