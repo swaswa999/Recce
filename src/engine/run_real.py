@@ -55,8 +55,12 @@ def main(path, force=False):
     # looking like a road with no crests on it.
     quantum, p95, verdict = elevation_report(x, y, ele)
     if ele is not None:
-        print(f"elevation: {quantum:.2f} m resolution, p95 gradient {p95:.0%} "
-              f"-> {verdict}")
+        # Label the quantum. Printed bare it misleads in both directions: a
+        # continuous source shows "0.00 m", which reads like missing data, while
+        # a quantized one shows a reassuringly small-sounding "1.00 m".
+        kind = "quantized" if quantum > 0.01 else "continuous"
+        print(f"elevation: quantum {quantum:.4f} m ({kind}), "
+              f"p95 gradient {p95:.0%} -> {verdict}")
         if verdict != "ok":
             print("\n*** DEGRADED: crest detection SUPPRESSED on this road.")
             print(f"*** {verdict}.")

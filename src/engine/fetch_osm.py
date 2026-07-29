@@ -16,13 +16,21 @@ import json
 import sys
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
 
 OVERPASS_MIRRORS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
 )
 OPEN_ELEVATION = "https://api.open-elevation.com/api/v1/lookup"
+USGS_EPQS = "https://epqs.nationalmap.gov/v1/json"
 UA = "Recce/0.1 (pacenote engine; road geometry research)"
+
+# 3DEP returns a sentinel far outside any real elevation when a point falls
+# outside coverage (it is a US-only dataset).
+NO_DATA_BELOW = -1000.0
 
 
 def _post(url, data, content_type, timeout=120):
@@ -91,6 +99,58 @@ def fetch_road(name, bbox, ref=None):
     return lon, lat
 
 
+def _epqs_point(lonlat, retries=2):
+    lo, la = lonlat
+    q = urllib.parse.urlencode({"x": lo, "y": la, "units": "Meters",
+                                "wkid": 4326, "includeDate": "false"})
+    for _ in range(retries + 1):
+        try:
+            req = urllib.request.Request(f"{USGS_EPQS}?{q}",
+                                         headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                v = float(json.load(resp)["value"])
+            return v if v > NO_DATA_BELOW else None
+        except Exception:  # noqa: BLE001 - transient; retry then give up
+            continue
+    return None
+
+
+def fetch_elevation_3dep(lon, lat, workers=8):
+    """USGS 3DEP elevation, one point per request but fetched concurrently.
+
+    Preferred over Open-Elevation, which is unusable for crest detection.
+    Measured on the same 40 points of the Tail of the Dragon:
+
+        Open-Elevation  p95 |grade| 0.9%   max 425%   vertical res 1.000 m
+        USGS 3DEP       p95 |grade| 7.2%   max 8.3%   vertical res 0.060 m
+
+    Open-Elevation's integer-metre steps make most consecutive points read as
+    dead flat and the rest as cliffs. 3DEP's profile is a real mountain road.
+
+    One HTTP request per point is a poor API shape, but elevation is one-time
+    preprocessing per route pack (the route-first architecture), so threading it
+    is enough and avoids a GDAL/rasterio dependency. Returns None if too much of
+    the road is outside coverage — 3DEP is US-only.
+    """
+    pts = list(zip(lon, lat))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        vals = list(pool.map(_epqs_point, pts))
+    missing = sum(v is None for v in vals)
+    if missing > 0.05 * len(vals):
+        print(f"  3DEP: {missing}/{len(vals)} points outside coverage "
+              f"— falling back")
+        return None
+    if missing:
+        # interpolate the few gaps rather than discarding an otherwise good road
+        print(f"  3DEP: interpolating {missing} missing point(s)")
+        idx = [i for i, v in enumerate(vals) if v is not None]
+        known = [vals[i] for i in idx]
+        for i, v in enumerate(vals):
+            if v is None:
+                vals[i] = float(np.interp(i, idx, known))
+    return [float(v) for v in vals]
+
+
 def fetch_elevation(lon, lat, batch=100):
     """Open-Elevation lookup (SRTM). For production, read SRTM tiles locally.
 
@@ -129,8 +189,15 @@ if __name__ == "__main__":
     print(f"fetching '{ref or name}' from OSM...")
     lon, lat = fetch_road(name, bbox, ref)
     print(f"  {len(lon)} points")
-    print("fetching elevation...")
-    ele = fetch_elevation(lon, lat)
+
+    # 3DEP first: Open-Elevation's integer-metre heights are unfit for crest
+    # detection and get the whole crest channel suppressed downstream.
+    print(f"fetching elevation from USGS 3DEP ({len(lon)} points)...")
+    ele = fetch_elevation_3dep(lon, lat)
+    if ele is None:
+        print("falling back to Open-Elevation (crest detection will likely be "
+              "suppressed — see docs/ARCHITECTURE.md)")
+        ele = fetch_elevation(lon, lat)
     if ele is None:
         print("\n*** NO ELEVATION: crest warnings will be absent from this road.")
         print("*** That is a missing safety callout, not an absence of crests.\n")
