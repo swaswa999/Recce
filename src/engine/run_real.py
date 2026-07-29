@@ -7,9 +7,8 @@ import json
 import sys
 import numpy as np
 
-from geometry import (lonlat_to_xy, node_spacing_stats, elevation_quality,
-                      resample, SEG_SPACING)
-from pipeline import analyze_to_script
+from geometry import lonlat_to_xy, node_spacing_stats
+from pipeline import analyze_to_script, elevation_report
 
 # Below this node density the geometry cannot support trustworthy pacenotes:
 # resampling finer than the survey manufactures kinks that a short-window arc
@@ -51,15 +50,14 @@ def main(path, force=False):
     print(f"node spacing: median {med:.1f} m, p90 {p90:.1f} m, max {mx:.1f} m "
           f"({frac_coarse:.0%} of gaps over {MAX_TRUSTED_MEDIAN_SPACING:.0f} m)")
 
-    # Elevation fitness decides whether crest callouts are emitted at all.
-    trust_elevation = True
+    # Report the elevation verdict. analyze() enforces it either way — this only
+    # surfaces the reason so a suppressed crest channel is visible rather than
+    # looking like a road with no crests on it.
+    quantum, p95, verdict = elevation_report(x, y, ele)
     if ele is not None:
-        _, _, _, zi = resample(x, y, ele, spacing=SEG_SPACING)
-        quantum, p95, verdict = elevation_quality(ele, zi, SEG_SPACING)
         print(f"elevation: {quantum:.2f} m resolution, p95 gradient {p95:.0%} "
               f"-> {verdict}")
         if verdict != "ok":
-            trust_elevation = False
             print("\n*** DEGRADED: crest detection SUPPRESSED on this road.")
             print(f"*** {verdict}.")
             print("*** Corner severity and shape are still usable; 'over crest'")
@@ -68,7 +66,6 @@ def main(path, force=False):
             print("*** Needs a better DEM (SRTM tiles read directly, or LIDAR)")
             print("*** than a point-lookup elevation API.\n")
     else:
-        trust_elevation = False
         print("elevation: absent -> crest warnings will not be emitted")
 
     if p90 > MAX_TRUSTED_P90_SPACING:
@@ -94,10 +91,9 @@ def main(path, force=False):
         print(msg)
         print(">>> --force given: output below is UNTRUSTWORTHY <<<\n")
 
-    s, corners, loose, events, script = analyze_to_script(
-        x, y, ele if trust_elevation else None)
+    s, corners, loose, events, script = analyze_to_script(x, y, ele)
     print(f"\nPACENOTES: {road.get('name', path)}"
-          f"{'' if trust_elevation else '  [no crest data]'}\n")
+          f"{'' if verdict == 'ok' else '  [no crest data]'}\n")
     print(script)
 
     # fun-density score: corners per km weighted by severity. Reused later as
