@@ -9,15 +9,10 @@ see [MVP-PLAN.md](MVP-PLAN.md). The roadmap phases below map to plan phases A–
 
 ## In progress
 
-- **A real DEM.** This is the top item. Crest detection is currently dead on real
-  roads: `over crest` and `don't cut` are suppressed entirely because
-  Open-Elevation gives integer metres and a 126% p95 gradient. Blind crests
-  mid-corner are the highest-consequence hazard this product set out to warn
-  about, so a permanently silent crest channel is the biggest functional gap in
-  the MVP. Candidates: USGS 3DEP 1 m LIDAR (US roads), Copernicus DEM GLO-30,
-  reading SRTM tiles directly with bilinear interpolation, or barometric
-  altitude from recorded rides. Needs its own evaluation — do not just swap the
-  API and re-enable the channel.
+- **Ride it.** Every remaining question about callout quality needs a road and a
+  bike. The engine now produces plausible pacenotes for a real 34.8 km mountain
+  road with working crest warnings; whether the severity bands and the pacing
+  match how it actually rides is not answerable at a desk.
 
 ## Todo
 
@@ -31,17 +26,26 @@ see [MVP-PLAN.md](MVP-PLAN.md). The roadmap phases below map to plan phases A–
    band 3 vs 4 matches how it actually rides. This needs someone who knows a road.
 4. **Calibrate the spacing thresholds on more real roads.** 12 m median / 25 m p90,
    measured on one synthetic road and sanity-checked on one real one.
-6. **Elevation on the stress road.** `synth_stress.py` deliberately has no
+5. **A non-US elevation source.** 3DEP is US-only. Non-US roads currently fall
+   back to Open-Elevation, which fails the fitness gate, so their crest channel
+   is silent. Needs a raster source (Copernicus DEM GLO-30) and probably a
+   GDAL/rasterio dependency — none of `rasterio`, `osgeo.gdal`, `rioxarray` or
+   `pyproj` is installed today.
+6. **Validate crest detection against known crests.** 5 crests over 34.8 km is
+   *plausible*, which is not the same as correct. `synth_stress.py` has no
+   elevation, so crest logic is still only tested by the answer-key road. Zero
+   standalone crests on the Dragon is worth a second look.
+7. **Elevation on the stress road.** `synth_stress.py` deliberately has no
    crests, so crest detection and "don't cut" are still only tested by the
    answer-key road.
-7. **Geometry classes neither test road covers.** Both roads are clean, isolated
+8. **Geometry classes neither test road covers.** Both roads are clean, isolated
    corners separated by long straights. Untested: switchbacks with no straight
    between them, corners shorter than the fit window, compound corners that
    tighten *then* open, off-camber/banked sections, junctions and forks, doubling-
    back geometry where the road nearly touches itself, and very long constant
    sweepers. Neither road discriminates the new estimator from the old on radius
    accuracy — only the decimated-geometry tests do that.
-8. **Finish the third `severity-bias-reviewer` pass.** Rounds 1 and 2 returned
+9. **Finish the third `severity-bias-reviewer` pass.** Rounds 1 and 2 returned
    BLOCKING and were addressed; round 3 was cut off by an API spend limit before
    giving a verdict. Its one partial finding (the stress road doesn't discriminate)
    was verified and folded in. Phase B has no clean verdict on record.
