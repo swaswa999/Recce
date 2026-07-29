@@ -15,11 +15,18 @@ reconnaissance runs where rally crews write their notes.
 ## Current state
 
 The Phase 0 pacenote engine is in `src/engine/`, with its answer key encoded as a
-test suite in `tests/`. 22 tests pass; 1 is a strict `xfail` marking the known
-smoothing bug.
+test suite in `tests/`. **126 pass, 2 strict xfails** which deliberately pin known
+limits — a test-road artifact and the node-density information limit — so that if
+either is ever fixed the test fails and forces the marker off.
 
-Active phase: **Phase B — fix the severity underestimate** (per-segment arc fitting).
-See [docs/MVP-PLAN.md](docs/MVP-PLAN.md).
+The MVP loop runs end to end on a real road: OSM geometry → two-scale corner
+estimation → severity, shape and crest modifiers → grip-limited speed profile →
+seconds-ahead scheduling → spoken audio. Validated on the Tail of the Dragon
+(34.8 km, 260 corners, 5 blind crests).
+
+Active phase: **Phase D — ride it.** Every remaining question about callout quality
+needs a road and a bike, not code. See [docs/MVP-PLAN.md](docs/MVP-PLAN.md) and
+[docs/TASKS.md](docs/TASKS.md).
 
 ## Working conventions
 
