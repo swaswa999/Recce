@@ -4,6 +4,10 @@ A rally co-driver for public roads. This note is the entry point when browsing t
 repo as an Obsidian vault; `memory/` is a symlink to Claude Code's memory directory,
 so agent-written notes and project docs are both visible here.
 
+## Start here
+
+- [[QUICKSTART]] — verified commands to run everything on this machine
+
 ## Project docs — the current state of things
 
 - [[PRODUCT]] — problem, feature set, competitive gap, business shape

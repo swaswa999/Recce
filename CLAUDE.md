@@ -23,6 +23,8 @@ See [docs/MVP-PLAN.md](docs/MVP-PLAN.md).
 
 ## Working conventions
 
+Verified runnable commands: [QUICKSTART.md](QUICKSTART.md).
+
 - Install: `pip install numpy pytest`
 - Test: `python3 -m pytest` (from repo root)
 - Demo: `cd src/engine && python3 run_demo.py` — synthetic road, ground truth vs
