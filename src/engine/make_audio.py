@@ -25,8 +25,10 @@ import numpy as np
 
 from geometry import lonlat_to_xy, resample, signed_radius, smooth_radius, SEG_SPACING
 from pipeline import analyze
-from speed import speed_profile, time_profile, lean_angle
+from speed import speed_profile, time_profile, lean_angle, V_MAX
 from timing import build_callouts, schedule, format_schedule, MODES
+from trace import (load_gpx, time_profile_from_trace, format_report,
+                   speed_from_time_profile)
 from synth_road import build_road
 
 RATE = 22050
@@ -109,6 +111,19 @@ def main():
     ap.add_argument("--voice", default=VOICE)
     ap.add_argument("--no-audio", action="store_true",
                     help="print the schedule only, skip TTS")
+    ap.add_argument("--gpx", help="recorded ride to take timing from. Callouts "
+                                  "are placed by how you ACTUALLY rode rather "
+                                  "than a modelled speed profile — the only way "
+                                  "a fixed track stays in sync")
+    ap.add_argument("--max-kmh", type=float,
+                    help=f"cap the modelled speed (default "
+                         f"{V_MAX * 3.6:.0f} km/h). Set this near your real "
+                         f"pace or the track drifts badly. Ignored with --gpx")
+    ap.add_argument("--from-km", type=float, default=0.0,
+                    help="render only from this distance, for testing a short "
+                         "segment where drift stays small")
+    ap.add_argument("--to-km", type=float,
+                    help="render only up to this distance")
     args = ap.parse_args()
 
     if args.road:
@@ -122,14 +137,34 @@ def main():
     # speed needs a radius sampled on the same grid as s
     _, xi, yi, _ = resample(x, y, None, spacing=SEG_SPACING)
     r_grid = smooth_radius(signed_radius(xi, yi, window=3), k=5)
-    v = speed_profile(s, r_grid)
-    t = time_profile(s, v)
+
+    print(f"road: {name}")
+    if args.gpx:
+        trace_lon, trace_lat, trace_t = load_gpx(args.gpx)
+        t, rep = time_profile_from_trace(s, xi, yi, trace_lon, trace_lat, trace_t)
+        print(format_report(rep))
+        v = speed_from_time_profile(s, t, radius=r_grid)
+    else:
+        v = speed_profile(s, r_grid,
+                          v_max=(args.max_kmh / 3.6) if args.max_kmh else V_MAX)
+        t = time_profile(s, v)
+        print("timing: MODELLED speed profile — this track is open-loop. Any "
+              "difference between\n  this pace and yours compounds into drift; "
+              "use --gpx with a recorded ride, or\n  keep the segment short.")
     lean = lean_angle(v, r_grid)
 
     callouts = build_callouts(corners, loose)
+    if args.from_km or args.to_km:
+        lo = args.from_km * 1000.0
+        hi = args.to_km * 1000.0 if args.to_km else s[-1]
+        callouts = [c for c in callouts if lo <= c.anchor_s <= hi]
+        # Zero the clock at the segment start, otherwise the track opens with
+        # however many minutes of silence precede it.
+        t = t - float(np.interp(lo, s, t))
+        print(f"segment: {lo / 1000:.1f}-{hi / 1000:.1f} km "
+              f"({len(callouts)} callouts)")
     kept, dropped = schedule(callouts, s, t, mode=args.mode)
 
-    print(f"road: {name}")
     print(f"length {s[-1]:.0f} m, {len(corners)} corners, "
           f"ride time {t[-1] / 60:.1f} min")
     print(f"speed {v.min() * 3.6:.0f}-{v.max() * 3.6:.0f} km/h "
