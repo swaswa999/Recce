@@ -9,8 +9,15 @@ see [MVP-PLAN.md](MVP-PLAN.md). The roadmap phases below map to plan phases A–
 
 ## In progress
 
-- **Phase B — awaiting final `severity-bias-reviewer` verdict.** Two BLOCKING
-  rounds so far, both legitimate; see MVP-PLAN.md for what each caught.
+- **A real DEM.** This is the top item. Crest detection is currently dead on real
+  roads: `over crest` and `don't cut` are suppressed entirely because
+  Open-Elevation gives integer metres and a 126% p95 gradient. Blind crests
+  mid-corner are the highest-consequence hazard this product set out to warn
+  about, so a permanently silent crest channel is the biggest functional gap in
+  the MVP. Candidates: USGS 3DEP 1 m LIDAR (US roads), Copernicus DEM GLO-30,
+  reading SRTM tiles directly with bilinear interpolation, or barometric
+  altitude from recorded rides. Needs its own evaluation — do not just swap the
+  API and re-enable the channel.
 
 ## Todo
 
@@ -22,11 +29,7 @@ see [MVP-PLAN.md](MVP-PLAN.md). The roadmap phases below map to plan phases A–
 3. **Judge the severity bands on a road I know.** The Tail of the Dragon now
    runs end to end (260 corners over 34.8 km, 7.5/km), but I can't tell whether
    band 3 vs 4 matches how it actually rides. This needs someone who knows a road.
-4. **Get a real DEM.** Open-Elevation is unfit for crest detection — crest
-   callouts are currently suppressed on real roads entirely. Options: read SRTM
-   tiles directly with bilinear interpolation, 1 m LIDAR where available, or
-   barometric altitude from recorded rides.
-5. **Calibrate the spacing thresholds on more real roads.** 12 m median / 25 m p90,
+4. **Calibrate the spacing thresholds on more real roads.** 12 m median / 25 m p90,
    measured on one synthetic road and sanity-checked on one real one.
 6. **Elevation on the stress road.** `synth_stress.py` deliberately has no
    crests, so crest detection and "don't cut" are still only tested by the
@@ -69,6 +72,20 @@ Unscheduled:
 
 ## Done
 
+- **Phase C partial — real road end to end** (2026-07-28). Tail of the Dragon
+  fetched from Overpass and run through the engine: 260 corners over 34.8 km.
+  Found and fixed two data-fitness defects (elevation unfit for crests; median
+  node spacing an insufficient gate) and four callout-layer defects (linked
+  corners colliding and being dropped, warnings droppable by collision, the
+  elevation gate bypassable by any caller, negative speak times silently
+  clipping audio). None were visible to 108 green tests on synthetic roads.
+- **Phase D built, not yet ridden** (2026-07-28). `speed.py`, `timing.py`,
+  `make_audio.py`. Renders a listenable timed callout track for synthetic or
+  real roads.
+- **Phase B — two-scale curvature estimation** (2026-07-27). Worst corner
+  +26.7% → +13.6%, all others inside 0.6%, false `opens` on decimated geometry
+  20–50% → 0. Two BLOCKING reviewer rounds, both legitimate; third round cut
+  off by an API spend limit, so no clean verdict is on record.
 - **Phase A — Engine in repo, answer key under test** (2026-07-27). Recovered the
   engine from `~/Desktop/pacenotes/` into `src/engine/`, encoded all 7 answer-key
   features as assertions in `tests/`, and added the optimistic-bias invariants.
