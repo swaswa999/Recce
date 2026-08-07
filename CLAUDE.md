@@ -14,23 +14,43 @@ reconnaissance runs where rally crews write their notes.
 
 ## Current state
 
-Fresh scaffold — **no application code committed yet.** A Phase 0 pacenote engine
-was built and validated in Python, but it lives in an off-machine
-`pacenote-engine.zip`. Recovering it is task #1 in TASKS.md.
+The Phase 0 pacenote engine is in `src/engine/`, with its answer key encoded as a
+test suite in `tests/`. **126 pass, 2 strict xfails** which deliberately pin known
+limits — a test-road artifact and the node-density information limit — so that if
+either is ever fixed the test fails and forces the marker off.
 
-Active phase: **Phase 1 — audio validation** (callout track timed to a recorded GPS
-trace, ridden on a known road).
+The MVP loop runs end to end on a real road: OSM geometry → two-scale corner
+estimation → severity, shape and crest modifiers → grip-limited speed profile →
+seconds-ahead scheduling → spoken audio. Validated on the Tail of the Dragon
+(34.8 km, 260 corners, 5 blind crests).
+
+Active phase: **Phase D — ride it.** Every remaining question about callout quality
+needs a road and a bike, not code. See [docs/MVP-PLAN.md](docs/MVP-PLAN.md) and
+[docs/TASKS.md](docs/TASKS.md).
 
 ## Working conventions
 
-Not yet established — the repo has no code. Set these when the engine lands:
+Verified runnable commands: [QUICKSTART.md](QUICKSTART.md).
 
-- Install: `TODO`
-- Run: `TODO`
-- Test: `TODO`
-- Lint/typecheck: `TODO`
+- Install: `pip install numpy pytest`
+- Test: `python3 -m pytest` (from repo root)
+- Demo: `cd src/engine && python3 run_demo.py` — synthetic road, ground truth vs
+  engine output
+- Audio: `cd src/engine && python3 make_audio.py -o ~/Desktop/ride.wav` — renders a
+  listenable timed callout track. `--no-audio` prints the schedule only;
+  `--mode guardian` for minimal verbosity.
+- Real road: `python3 fetch_osm.py <name> <bbox>` then `python3 run_real.py road.json`
+  (Overpass fetch needs open internet)
+- Lint/typecheck: not set up yet
 
-Planned layout: `src/engine/` (Python pacenote engine), `src/ios/` (Swift app).
+Pipeline entry point is `pipeline.analyze()` — the demo, `run_real.py`, `make_audio.py`
+and the tests all call it, so they can't validate different pipelines.
+
+Layout: `src/engine/` (Python pacenote engine), `tests/` (answer key + bias
+invariants), `src/ios/` (Swift app, not started).
+
+The engine modules use flat imports, so `run_demo.py` runs from inside
+`src/engine/`. `pytest.ini` puts that directory on the path for tests.
 
 ## Rules
 
@@ -54,7 +74,9 @@ General:
 
 ## Agent workflow
 
-Role-specific subagents live in `.claude/agents/`. All run on Sonnet.
+Role-specific subagents live in `.claude/agents/`. All run on Sonnet except
+`severity-bias-reviewer`, which runs on Opus — it's the check whose miss is most
+expensive.
 
 **Core loop**
 
