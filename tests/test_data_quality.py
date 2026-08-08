@@ -61,6 +61,63 @@ def test_implausible_gradient_is_rejected(road):
     assert "gradient" in verdict
 
 
+@pytest.mark.parametrize("contamination", [0.0, 0.01, 0.05, 0.20, 0.35])
+def test_interpolated_points_cannot_defeat_the_quantum_gate(road, contamination):
+    """The gate must not hinge on a handful of non-integer values.
+
+    Two statistics failed here. `min(nonzero steps)` was defeated by ONE
+    fractional value; the 10th percentile by 1%. Both shipped false "over crest
+    don't cut" callouts off integer-metre data. fetch_osm.py creates exactly
+    these points when interpolating across gaps in 3DEP coverage, so it is a
+    reachable path.
+    """
+    x, y, z = road
+    zq = np.round(z)
+    n = int(contamination * len(zq))
+    if n:
+        zq[np.linspace(0, len(zq) - 1, n).astype(int)] += 0.06
+    quantum, p95, verdict = elevation_quality(zq, gridded(x, y, zq), SEG_SPACING)
+    assert verdict != "ok", (
+        f"{contamination:.0%} fractional points defeated the gate "
+        f"(quantum {quantum:.3f} m) — the data is still integer-metre"
+    )
+
+
+def test_contiguous_interpolated_run_cannot_defeat_the_gate(road):
+    """A 3DEP coverage gap interpolates a contiguous RUN, not scattered points."""
+    x, y, z = road
+    zq = np.round(z)
+    n = int(0.20 * len(zq))
+    zq[100:100 + n] += 0.06
+    _, _, verdict = elevation_quality(zq, gridded(x, y, zq), SEG_SPACING)
+    assert verdict != "ok", "a contiguous interpolated run hid the integer grid"
+
+
+@pytest.mark.parametrize("decimate_by", [1, 3, 6, 8])
+def test_good_float_elevation_is_not_rejected_at_coarse_spacing(decimate_by):
+    """Sparse nodes must not be mistaken for coarse vertical resolution.
+
+    A step-size percentile scales with node spacing and terrain steepness, so at
+    66 m spacing it rejected genuine 3DEP float data — silently disabling every
+    crest callout and every "over crest don't cut" modifier. Dropping a crest
+    warning is the optimistic direction. Grid membership is scale-free and has
+    no such failure.
+    """
+    import json
+    from geometry import lonlat_to_xy
+    p = "/Users/SwayamS/Desktop/Projects/Recce/roads/tail-of-the-dragon.json"
+    road = json.load(open(p))
+    x, y = lonlat_to_xy(np.array(road["lon"]), np.array(road["lat"]))
+    ele = np.array(road["ele"], dtype=float)
+    zz, xx, yy = ele[::decimate_by], x[::decimate_by], y[::decimate_by]
+    _, _, _, zg = resample(xx, yy, zz, spacing=SEG_SPACING)
+    quantum, p95, verdict = elevation_quality(zz, zg, SEG_SPACING)
+    assert verdict == "ok", (
+        f"decimated 3DEP float data rejected at {decimate_by}x "
+        f"(quantum {quantum:.3f}, p95 {p95:.0%}): {verdict}"
+    )
+
+
 def test_quantum_is_measured_on_raw_not_resampled(road):
     """Resampling interpolates, so the grid hides the source's resolution.
 

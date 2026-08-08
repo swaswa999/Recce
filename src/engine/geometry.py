@@ -194,6 +194,38 @@ MAX_PLAUSIBLE_GRADE_P95 = 0.20
 MAX_ELEVATION_QUANTUM = 0.5
 
 
+GRID_CANDIDATES = (1.0, 0.5, 0.25, 0.1)
+GRID_FRACTION = 0.60
+
+
+def grid_step(z, candidates=GRID_CANDIDATES, fraction=GRID_FRACTION):
+    """Vertical quantum of an elevation series, 0.0 if it is continuous.
+
+    Quantization means the VALUES lie on a grid, so test that directly instead
+    of inferring it from step sizes. Two statistics were tried and both failed:
+
+    - `min(nonzero steps)` — one fractional value among thousands of
+      integer-metre steps flipped the verdict from rejected to ok.
+    - `10th percentile of nonzero steps` — a fractional point perturbs two
+      adjacent diffs and turns zero-steps into small nonzero ones, so 1%
+      contamination still defeated it. Worse, it scales with node spacing and
+      terrain steepness, so at 66 m spacing it rejected perfectly good float
+      elevation and silently disabled every crest callout.
+
+    Grid membership has neither problem: it is scale-free, and interpolated
+    points (which fetch_osm.py creates across 3DEP coverage gaps) have to make
+    up more than 40% of the road before they hide an integer grid.
+    """
+    z = np.asarray(z, dtype=float)
+    if len(z) == 0:
+        return 0.0
+    for q in sorted(candidates, reverse=True):
+        on_grid = float(np.mean(np.abs(z / q - np.round(z / q)) < 1e-6))
+        if on_grid >= fraction:
+            return float(q)
+    return 0.0
+
+
 def elevation_quality(z_raw, z_grid, spacing):
     """Is this elevation profile fit for crest detection?
 
@@ -213,9 +245,7 @@ def elevation_quality(z_raw, z_grid, spacing):
     them, so the grid's smallest step reflects the resample spacing rather than
     the source's vertical resolution and reads as a reassuring 0.00 m.
     """
-    steps = np.abs(np.diff(np.asarray(z_raw, dtype=float)))
-    nonzero = steps[steps > 1e-9]
-    quantum = float(np.min(nonzero)) if len(nonzero) else 0.0
+    quantum = grid_step(z_raw)
     grade = np.gradient(np.asarray(z_grid, dtype=float), spacing)
     p95 = float(np.percentile(np.abs(grade), 95))
 

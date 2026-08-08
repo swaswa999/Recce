@@ -12,6 +12,7 @@ venv/
 /memory
 
 # Rendered callout tracks
+out/
 *.wav
 *.aiff
 

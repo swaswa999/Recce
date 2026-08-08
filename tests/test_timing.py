@@ -11,7 +11,9 @@ from pipeline import analyze
 from geometry import resample, signed_radius, smooth_radius, SEG_SPACING
 from speed import speed_profile, time_profile, lean_angle, time_at, A_LAT, G
 from timing import (build_callouts, schedule, keep_for_mode, Callout,
-                    LEAD_SECONDS, MODES, MAX_LINK_CHAIN)
+                    LEAD_SECONDS, MODES, MAX_LINK_CHAIN, MIN_LEAD,
+                    MAX_EARLY_LEAD, MAX_UTTERANCE_SECONDS, unspoken_warnings,
+                    estimate_duration)
 from synth_road import build_road
 
 
@@ -115,22 +117,43 @@ def test_hazards_and_crests_count_as_warnings():
                        severity=4).is_warning
 
 
-def test_short_lead_is_flagged_not_hidden(ride):
-    """A corner too close to the ride start cannot get full warning.
+def test_short_lead_at_ride_start_is_spoken_not_silenced(ride):
+    """An uncontended callout close to the start is KEPT, flagged, not deleted.
 
-    The scheduler used to emit a negative speak_at, which the audio renderer
-    clamped to zero — silently clipping the front of the clip so the rider heard
-    a truncated callout that looked delivered. Clamp, but flag it.
+    It is fully audible from t=0 and still ends before the corner, so the
+    "attaches to the next corner" failure does not apply — the trade here is
+    genuinely "some warning" versus "no warning", and silence is the optimistic
+    choice. An earlier version dropped these for lead < MIN_LEAD, which silenced
+    the Dragon's first corner and the first ~60 m of every rendered segment.
+
+    Contrast test_no_kept_callout_ever_has_negative_lead: finishing AFTER the
+    corner is the real invariant, and that is never allowed.
     """
     s, t = ride["s"], ride["t"]
-    # a corner 25 m in: at road speed there is no room for a 3 s lead
     early = Callout(anchor_s=25.0, text="left 4", kind="corner", severity=4)
-    kept, _ = schedule([early], s, t)
-    assert kept, "the callout was dropped entirely"
+    kept, dropped = schedule([early], s, t)
+    assert kept, "an audible, uncontended callout was silenced"
     c = kept[0]
-    assert c.speak_at >= 0.0, f"negative speak_at {c.speak_at:.2f} would be clipped"
+    assert c.speak_at >= 0.0
+    assert c.lead >= 0.0, "finishes after its own corner"
     assert c.short_lead, "reduced lead was not flagged"
-    assert c.lead < LEAD_SECONDS
+
+
+def test_reduced_but_usable_lead_is_kept_and_flagged(ride):
+    """Between MIN_LEAD and the ideal, keep it but mark it."""
+    s, t = ride["s"], ride["t"]
+    # far enough in to be warnable, close enough that lead is squeezed
+    a = Callout(anchor_s=300.0, text="right 3 tightens", kind="corner", severity=3)
+    b = Callout(anchor_s=318.0, text="left 2 over crest don't cut",
+                kind="corner", severity=2)
+    kept, _ = schedule([a, b], s, t)
+    assert kept, "everything was dropped"
+    for c in kept:
+        assert c.lead >= MIN_LEAD, f"{c.text!r} kept with {c.lead:.2f}s lead"
+        assert not c.unwarnable
+    squeezed = [c for c in kept if c.lead < LEAD_SECONDS]
+    for c in squeezed:
+        assert c.short_lead, f"{c.text!r} has {c.lead:.2f}s lead but is unflagged"
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -164,6 +187,187 @@ def test_hazard_preempts_a_colliding_corner_call(ride):
     assert any(c.kind == "hazard" for c in kept), "hazard was not spoken"
     if len(kept) == 1:
         assert dropped and dropped[0].kind == "corner"
+
+
+def _uniform(length=1200.0, kmh=72.0):
+    s = np.arange(0.0, length, 5.0)
+    return s, s / (kmh / 3.6)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_no_kept_callout_ever_has_negative_lead(ride, mode):
+    """THE invariant. A callout finishing after its corner describes road the
+    rider is already in, and they will attach it to the NEXT corner — a hairpin
+    call landing on a corner of unknown severity.
+
+    Strictly worse than the drop it replaced: a dropped callout is silence, a
+    negative-lead callout is an actively wrong description.
+    """
+    kept, _ = schedule(ride["callouts"], ride["s"], ride["t"], mode=mode)
+    late = [(c.text, round(c.lead, 2)) for c in kept if c.lead < 0]
+    assert not late, f"mode={mode}: callouts finishing AFTER their corner: {late}"
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_squeezed_leads_are_always_flagged(ride, mode):
+    """Below the ideal lead is allowed; being silent about it is not."""
+    kept, _ = schedule(ride["callouts"], ride["s"], ride["t"], mode=mode)
+    unflagged = [(c.text, round(c.lead, 2)) for c in kept
+                 if c.lead < LEAD_SECONDS and not c.short_lead]
+    assert not unflagged, f"mode={mode}: squeezed but unflagged: {unflagged}"
+
+
+def test_stale_flags_never_drop_a_placed_callout(ride):
+    """Flags must derive from the FINAL placement, not the ideal one.
+
+    A stale `unwarnable` computed before placement deleted warnings that had
+    been successfully placed — one was removed for "lead 2.5s below the 1.0s
+    minimum", which is arithmetically self-contradicting.
+    """
+    kept, dropped = schedule(ride["callouts"], ride["s"], ride["t"])
+    for c in kept:
+        assert c.short_lead == (c.lead < LEAD_SECONDS), \
+            f"{c.text!r}: short_lead={c.short_lead} but lead={c.lead:.2f}"
+    contradictory = [c for c in dropped if c.is_warning and c.lead >= MIN_LEAD
+                     and "below" in c.dropped]
+    assert not contradictory, (
+        f"dropped for a lead it did not have: "
+        f"{[(c.text, round(c.lead, 2), c.dropped) for c in contradictory]}"
+    )
+
+
+def test_dense_warnings_never_produce_a_late_callout():
+    """The cascade that the delay-only scheduler turned into a pile-up.
+
+    Twelve tightly spaced warning corners used to yield leads from +3.0 down to
+    -16.2 s, with 10 of 12 callouts finishing after their corner — one of them
+    spoken 360 m past it.
+    """
+    s, t = _uniform()
+    cs = [Callout(anchor_s=float(200 + 20 * i), kind="corner", severity=2,
+                  text=f"left {i % 5 + 1} tightens over crest don't cut")
+          for i in range(12)]
+    kept, dropped = schedule(cs, s, t)
+    # The invariant is lead >= 0 — never finishing after the corner. Squeezed
+    # but positive leads are kept and flagged rather than silenced.
+    assert all(c.lead >= 0.0 for c in kept), \
+        f"leads: {sorted(round(c.lead, 2) for c in kept)}"
+    for c in kept:
+        if c.lead < MIN_LEAD:
+            assert c.short_lead, f"{c.text!r} has {c.lead:.2f}s lead but is unflagged"
+    # over-subscribed: the shortfall must be REPORTED, never silently mangled
+    assert len(kept) + len(dropped) == len(cs)
+    assert unspoken_warnings(dropped), \
+        "an over-subscribed stream dropped nothing — warnings were mangled instead"
+
+
+def test_no_two_kept_callouts_overlap_in_time():
+    """render() sums overlapping clips, so two kept callouts that overlap become
+    unintelligible while neither is marked dropped — a silent warning loss."""
+    s, t = _uniform()
+    cs = [Callout(anchor_s=float(200 + 20 * i), kind="corner", severity=2,
+                  text=f"left {i % 5 + 1} tightens over crest don't cut")
+          for i in range(12)]
+    kept, _ = schedule(cs, s, t)
+    ordered = sorted(kept, key=lambda c: c.speak_at)
+    bad = [(a.text[:20], b.text[:20]) for a, b in zip(ordered, ordered[1:])
+           if b.speak_at < a.ends_at - 1e-9]
+    assert not bad, f"overlapping kept callouts: {bad}"
+
+
+def test_callouts_are_spoken_in_road_order():
+    """A rider maps what they hear onto what they see next, so announcing a
+    corner at 240 m before one at 200 m misattributes both. Early placement
+    must not jump a corner that comes earlier on the road."""
+    s, t = _uniform()
+    cs = [Callout(anchor_s=float(p), kind="corner", severity=2,
+                  text=f"hairpin left tightens into right {i + 1} tightens")
+          for i, p in enumerate((200, 240, 275))]
+    cs.append(Callout(anchor_s=300.0, kind="hazard", text="caution, gravel"))
+    kept, _ = schedule(cs, s, t)
+    anchors = [c.anchor_s for c in kept]
+    assert anchors == sorted(anchors), \
+        f"callouts out of road order: {anchors}"
+
+
+def _fuzz_schedules(n=400, seed=0):
+    """Mixed durations, mixed kinds, clustered near t=0.
+
+    Every invariant test above is built from uniform, mid-ride, same-length
+    callouts — precisely the geometry where none of the real defects fire. This
+    generates the awkward cases: short hazards beside long merged chains, tight
+    clusters, and anchors close enough to the start that the clamp engages.
+    """
+    rng = np.random.default_rng(seed)
+    s, t = _uniform(2000.0, kmh=72.0)
+    for _ in range(n):
+        cs = []
+        for _ in range(int(rng.integers(2, 7))):
+            anchor = float(rng.uniform(20, 400))
+            kind = str(rng.choice(["corner", "corner", "corner", "hazard", "crest"]))
+            words = int(rng.integers(1, 11))
+            warn = bool(rng.integers(0, 2))
+            text = " ".join(["word"] * words) + (" tightens don't cut" if warn else "")
+            cs.append(Callout(anchor_s=anchor, kind=kind, text=text,
+                              severity=int(rng.integers(1, 7))))
+        yield cs, s, t
+
+
+def test_fuzz_no_overlap_no_inversion_no_late_callout():
+    """The three hard invariants, over awkward geometry rather than tidy cases."""
+    bad_overlap = bad_order = bad_late = bad_negative = 0
+    for cs, s, t in _fuzz_schedules():
+        kept, _ = schedule(cs, s, t)
+        ordered = sorted(kept, key=lambda c: c.speak_at)
+        if any(b.speak_at < a.ends_at - 1e-9 for a, b in zip(ordered, ordered[1:])):
+            bad_overlap += 1
+        if [c.anchor_s for c in ordered] != sorted(c.anchor_s for c in ordered):
+            bad_order += 1
+        if any(c.lead < -1e-9 for c in kept):
+            bad_late += 1
+        if any(c.speak_at < -1e-9 for c in kept):
+            bad_negative += 1
+    assert bad_overlap == 0, f"{bad_overlap} schedules with overlapping clips"
+    assert bad_order == 0, f"{bad_order} schedules heard out of road order"
+    assert bad_late == 0, f"{bad_late} schedules with a callout finishing late"
+    assert bad_negative == 0, f"{bad_negative} schedules with negative speak_at"
+
+
+def test_fuzz_reported_lead_matches_what_is_rendered():
+    """speak_at is what render() uses; lead must describe THAT, not an intent.
+
+    A negative speak_at was clamped by the renderer, so the reported lead
+    overstated the delivered lead by exactly the clamped amount.
+    """
+    for cs, s, t in _fuzz_schedules(n=200, seed=7):
+        kept, _ = schedule(cs, s, t)
+        for c in kept:
+            rendered_start = max(0.0, c.speak_at)
+            real_lead = np.interp(c.anchor_s, s, t) - (rendered_start + c.duration)
+            assert abs(real_lead - c.lead) < 1e-6, (
+                f"reported lead {c.lead:.2f}s but renders as {real_lead:.2f}s"
+            )
+
+
+def test_early_placement_is_bounded():
+    """Arbitrarily early is its own wrong-corner failure."""
+    s, t = _uniform()
+    cs = [Callout(anchor_s=float(p), kind="corner", severity=2,
+                  text=f"left 2 tightens over crest don't cut {i}")
+          for i, p in enumerate((300, 330, 360))]
+    kept, _ = schedule(cs, s, t)
+    too_early = [(c.text[:20], round(c.lead, 2)) for c in kept
+                 if c.lead > MAX_EARLY_LEAD + 1e-6]
+    assert not too_early, f"callouts placed further ahead than {MAX_EARLY_LEAD}s: {too_early}"
+
+
+def test_utterance_length_is_bounded(ride):
+    """Chains are limited by how long they take to say, not corner count."""
+    for c in ride["callouts"]:
+        d = estimate_duration(c.text)
+        assert d <= MAX_UTTERANCE_SECONDS + 1e-6 or " into " not in c.text, (
+            f"merged utterance runs {d:.1f}s: {c.text!r}"
+        )
 
 
 def test_linked_corners_merge_into_one_utterance(ride):

@@ -7,6 +7,7 @@ reconnaissance runs where rally crews write their notes.
 
 ## Orientation
 
+- Vault entry point when browsing in Obsidian: [START-HERE.md](START-HERE.md)
 - Product context, feature set, competitive gap: [docs/PRODUCT.md](docs/PRODUCT.md)
 - Pacenote pipeline, stack, key decisions: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - **MVP scope, phases, acceptance criteria: [docs/MVP-PLAN.md](docs/MVP-PLAN.md)**
@@ -47,7 +48,7 @@ Pipeline entry point is `pipeline.analyze()` — the demo, `run_real.py`, `make_
 and the tests all call it, so they can't validate different pipelines.
 
 Layout: `src/engine/` (Python pacenote engine), `tests/` (answer key + bias
-invariants), `src/ios/` (Swift app, not started).
+invariants), `roads/` (committed road data), `src/ios/` (Swift app, not started).
 
 The engine modules use flat imports, so `run_demo.py` runs from inside
 `src/engine/`. `pytest.ini` puts that directory on the path for tests.
