@@ -1,0 +1,513 @@
+<title>Recce Copilot</title>
+<style>
+  /* Instrument-cluster palette. Deliberately single-theme: this is read through
+     a visor in daylight or at night, so it commits to a dark ground with
+     warning-lamp amber rather than following the viewer's theme. Every colour is
+     painted explicitly so it holds on either host background. */
+  :root {
+    --ground:   #0B1013;   /* deep blue-black, not pure black */
+    --panel:    #131A1E;
+    --panel-2:  #1B252A;
+    --line:     #24323A;
+    --ink:      #E8EDEF;
+    --muted:    #7C8A91;   /* blue-grey, biased toward the ground */
+    --amber:    #FFB020;   /* accent: instrument warning lamp */
+    --critical: #FF5A47;   /* semantic only: hazards and warnings */
+    --go:       #4ED6A1;   /* semantic only: live/locked state */
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--ui);
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior: none;
+  }
+
+  body { display: flex; flex-direction: column; }
+
+  .label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ---------- pre-ride ---------- */
+
+  #setup {
+    flex: 1; overflow-y: auto;
+    padding: 28px 20px 40px;
+    max-width: 34rem; width: 100%; margin: 0 auto;
+    display: flex; flex-direction: column; gap: 22px;
+  }
+
+  .wordmark {
+    font-family: var(--mono);
+    font-size: 13px; letter-spacing: 0.34em;
+    text-transform: uppercase; color: var(--amber);
+  }
+
+  h1 {
+    font-size: clamp(28px, 8vw, 40px);
+    line-height: 1.05; margin: 0;
+    letter-spacing: -0.02em; text-wrap: balance;
+  }
+
+  .lede { color: var(--muted); line-height: 1.55; margin: 0; font-size: 15px; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    padding: 16px 18px;
+  }
+
+  /* The severity stripe encodes danger, not decoration */
+  .warnbox { border-left: 3px solid var(--critical); }
+
+  .warnbox h2 {
+    margin: 0 0 8px; font-size: 15px;
+    color: var(--critical); letter-spacing: 0.01em;
+  }
+
+  .warnbox ul { margin: 0; padding-left: 18px; color: var(--ink); }
+  .warnbox li { margin: 6px 0; line-height: 1.5; font-size: 14px; }
+
+  .roadname {
+    font-family: var(--mono); font-size: 18px;
+    color: var(--ink); margin: 6px 0 0;
+  }
+
+  .stats {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: var(--line);
+    border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
+  }
+  .stat { background: var(--panel); padding: 12px 14px; }
+  .stat b {
+    display: block; font-family: var(--mono);
+    font-size: 20px; font-weight: 600; margin-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  fieldset { border: 0; padding: 0; margin: 0; }
+
+  .modes { display: flex; gap: 8px; margin-top: 10px; }
+
+  .mode {
+    flex: 1; padding: 14px 8px; text-align: center;
+    background: var(--panel); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 4px;
+    font-family: var(--mono); font-size: 13px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    cursor: pointer;
+  }
+  .mode[aria-pressed="true"] {
+    background: var(--panel-2); color: var(--amber);
+    border-color: var(--amber);
+  }
+
+  button { font: inherit; }
+
+  #start {
+    width: 100%; padding: 22px;
+    background: var(--amber); color: #16202A;
+    border: 0; border-radius: 4px;
+    font-family: var(--mono); font-size: 19px; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    cursor: pointer;
+  }
+  #start[disabled] { opacity: 0.45; }
+
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+  /* ---------- riding ---------- */
+
+  #ride { flex: 1; display: none; flex-direction: column; }
+  body.riding #setup { display: none; }
+  body.riding #ride { display: flex; }
+
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .fix { display: flex; align-items: center; gap: 8px; }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--muted);
+  }
+  .dot.live { background: var(--go); }
+  .dot.poor { background: var(--amber); }
+
+  .speed {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 26px; font-weight: 600;
+  }
+  .speed span { font-size: 12px; color: var(--muted); margin-left: 3px; }
+
+  /* The callout is the whole point — it gets the whole screen */
+  .stage {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 20px; text-align: center; gap: 18px;
+  }
+
+  #calltext {
+    font-family: var(--mono); font-weight: 700;
+    font-size: clamp(30px, 11vw, 62px);
+    line-height: 1.08; letter-spacing: -0.02em;
+    text-wrap: balance; margin: 0;
+  }
+  #calltext.warn { color: var(--critical); }
+  #calltext.idle { color: var(--muted); font-size: clamp(20px, 6vw, 30px); }
+
+  #dist {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: clamp(38px, 14vw, 76px); font-weight: 300;
+    color: var(--amber); line-height: 1; margin: 0;
+  }
+  #dist span { font-size: 0.3em; color: var(--muted); margin-left: 6px; }
+
+  .log {
+    border-top: 1px solid var(--line);
+    padding: 10px 16px 14px;
+    min-height: 76px;
+  }
+  .log ol {
+    list-style: none; margin: 6px 0 0; padding: 0;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .log li {
+    font-family: var(--mono); font-size: 13px; color: var(--muted);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .log li:first-child { color: var(--ink); }
+
+  .controls { display: flex; gap: 1px; background: var(--line); }
+  .controls button {
+    flex: 1; padding: 20px 8px;
+    background: var(--panel); color: var(--ink); border: 0;
+    font-family: var(--mono); font-size: 13px;
+    letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+  }
+  #stop { color: var(--critical); }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%);
+    background: var(--panel-2); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 4px;
+    padding: 10px 16px; font-family: var(--mono); font-size: 13px;
+    opacity: 0; pointer-events: none; transition: opacity 0.25s;
+    max-width: 88vw; text-align: center;
+  }
+  .toast.show { opacity: 1; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
+
+<main id="setup">
+  <div>
+    <div class="wordmark">Recce</div>
+    <h1>Pacenotes, spoken as you ride</h1>
+  </div>
+
+  <p class="lede">
+    Your phone tracks where you are and speaks each corner a few seconds before
+    you reach it — direction, severity, and what the corner does. Pair a helmet
+    intercom and put the phone away.
+  </p>
+
+  <div class="card">
+    <div class="label">Loaded road</div>
+    <p class="roadname" id="roadname">—</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="label">Length</div><b id="s-len">—</b></div>
+    <div class="stat"><div class="label">Callouts</div><b id="s-calls">—</b></div>
+    <div class="stat"><div class="label">Warnings</div><b id="s-warn">—</b></div>
+  </div>
+
+  <fieldset>
+    <div class="label">How much to say</div>
+    <div class="modes" role="group">
+      <button class="mode" data-mode="full" aria-pressed="true">Full</button>
+      <button class="mode" data-mode="highlights" aria-pressed="false">Highlights</button>
+      <button class="mode" data-mode="guardian" aria-pressed="false">Guardian</button>
+    </div>
+  </fieldset>
+
+  <div class="card warnbox">
+    <h2>Read this before you set off</h2>
+    <ul>
+      <li>This is a prototype. It has never been validated on a ride. Treat
+        every callout as possibly wrong.</li>
+      <li>It describes the road — it is not telling you to go faster. Ride
+        within your sight lines and the law.</li>
+      <li>Callouts can be late, missing, or about the wrong corner, especially
+        where GPS is poor.</li>
+      <li>Start it while stopped. Don't look at or touch the screen while
+        moving.</li>
+    </ul>
+  </div>
+
+  <button id="start">Start — I have read this</button>
+  <p class="lede" id="hint" style="font-size:13px">
+    Keep this tab open. Once loaded it needs GPS but no signal, so it works in
+    dead zones.
+  </p>
+</main>
+
+<section id="ride" aria-live="off">
+  <div class="topbar">
+    <div class="fix">
+      <span class="dot" id="fixdot"></span>
+      <span class="label" id="fixtext">Waiting for GPS</span>
+    </div>
+    <div class="speed"><span id="spd">—</span><span>km/h</span></div>
+  </div>
+
+  <div class="stage">
+    <p id="calltext" class="idle">Locating you on the road…</p>
+    <p id="dist"></p>
+  </div>
+
+  <div class="log">
+    <div class="label">Spoken</div>
+    <ol id="loglist"></ol>
+  </div>
+
+  <div class="controls">
+    <button id="mute">Mute</button>
+    <button id="stop">End ride</button>
+  </div>
+</section>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const PACK = __PACK__;
+
+// Speak so the callout FINISHES this many seconds before the corner. A rider
+// still hearing the description while turning in has been told too late.
+const LEAD_SECONDS = 3.0;
+// Look no further ahead than this, so a long straight doesn't trigger the next
+// corner while it is still far away.
+const MAX_LOOKAHEAD_S = 12.0;
+const RANK_LIMIT = { full: 99, highlights: 4, guardian: 2 };
+
+const el = id => document.getElementById(id);
+let mode = "full", muted = false, watchId = null, wakeLock = null;
+let lastIdx = null, dir = 0, spoken = new Set(), speaking = false;
+let lastFix = null, smoothSpeed = 0;
+
+// ---- geometry ------------------------------------------------------------
+
+const R = 6371000, D2R = Math.PI / 180;
+const lat0 = PACK.lat[0] * D2R;
+const mx = lon => lon * D2R * R * Math.cos(lat0);
+const my = lat => lat * D2R * R;
+const NX = PACK.lon.map(mx), NY = PACK.lat.map(my);
+
+// Match to the nearest node, searching near the last match once locked. The
+// Dragon doubles back on itself, so a global nearest-node search can jump to a
+// switchback running the other way a few metres across the hillside.
+function matchNode(x, y) {
+  let lo = 0, hi = NX.length - 1;
+  if (lastIdx !== null) {
+    lo = Math.max(0, lastIdx - 120);
+    hi = Math.min(NX.length - 1, lastIdx + 120);
+  }
+  let best = -1, bestD = Infinity;
+  for (let i = lo; i <= hi; i++) {
+    const dx = NX[i] - x, dy = NY[i] - y, d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  return { idx: best, dist: Math.sqrt(bestD) };
+}
+
+function eligible(c) {
+  if (c.warn || c.kind !== "corner") return true;   // warnings survive every mode
+  return c.rank <= RANK_LIMIT[mode];
+}
+
+// ---- speech --------------------------------------------------------------
+
+function say(text, isWarning) {
+  if (muted || !("speechSynthesis" in window)) return;
+  // A warning interrupts a plain description; nothing interrupts a warning.
+  if (speaking && !isWarning) return;
+  if (speaking && isWarning) speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.rate = 1.05; u.pitch = 1.0; u.volume = 1.0;
+  u.onstart = () => { speaking = true; };
+  u.onend = u.onerror = () => { speaking = false; };
+  speechSynthesis.speak(u);
+}
+
+function logSpoken(text, isWarning) {
+  const li = document.createElement("li");
+  li.textContent = text;
+  if (isWarning) li.style.color = "var(--critical)";
+  const list = el("loglist");
+  list.prepend(li);
+  while (list.children.length > 3) list.lastChild.remove();
+}
+
+// ---- ride loop -----------------------------------------------------------
+
+function onFix(pos) {
+  const x = mx(pos.coords.longitude), y = my(pos.coords.latitude);
+  const m = matchNode(x, y);
+  const acc = pos.coords.accuracy || 99;
+
+  // Off the road, or a fix too poor to trust: say nothing rather than guess.
+  if (m.idx < 0 || m.dist > 60) {
+    setFix("off", `Off route — ${Math.round(m.dist)} m`);
+    el("calltext").className = "idle";
+    el("calltext").textContent = "Off the loaded road";
+    el("dist").textContent = "";
+    lastFix = null;
+    return;
+  }
+  setFix(acc <= 20 ? "live" : "poor",
+         acc <= 20 ? "Tracking" : `Weak GPS ±${Math.round(acc)} m`);
+
+  if (lastIdx !== null && m.idx !== lastIdx) dir = Math.sign(m.idx - lastIdx) || dir;
+  lastIdx = m.idx;
+  const s = PACK.node_s[m.idx];
+
+  // Speed: prefer the GPS's own, fall back to differencing positions.
+  let v = pos.coords.speed;
+  if (v === null || isNaN(v) || v < 0) {
+    if (lastFix) {
+      const dt = (pos.timestamp - lastFix.t) / 1000;
+      if (dt > 0.2) v = Math.abs(s - lastFix.s) / dt;
+    }
+  }
+  if (v === null || isNaN(v)) v = 0;
+  smoothSpeed = smoothSpeed ? smoothSpeed * 0.7 + v * 0.3 : v;
+  lastFix = { t: pos.timestamp, s };
+  el("spd").textContent = Math.round(smoothSpeed * 3.6);
+
+  // Next callout ahead in the direction of travel.
+  const ahead = PACK.callouts
+    .filter(c => eligible(c) && !spoken.has(c.s) &&
+                 (dir >= 0 ? c.s > s : c.s < s))
+    .sort((a, b) => dir >= 0 ? a.s - b.s : b.s - a.s);
+
+  if (!ahead.length) {
+    el("calltext").className = "idle";
+    el("calltext").textContent = "No more callouts ahead";
+    el("dist").textContent = "";
+    return;
+  }
+
+  const next = ahead[0];
+  const gap = Math.abs(next.s - s);
+  const eta = smoothSpeed > 1 ? gap / smoothSpeed : Infinity;
+
+  el("calltext").className = next.warn ? "warn" : "";
+  el("calltext").textContent = next.text;
+  el("dist").innerHTML = Math.round(gap) + "<span>m</span>";
+
+  // Speak when the rider is LEAD_SECONDS away, allowing for how long the
+  // phrase takes to say. Words-per-second is deliberately pessimistic.
+  const speakSecs = Math.max(0.6, next.text.split(" ").length / 2.2);
+  if (eta <= LEAD_SECONDS + speakSecs && eta <= MAX_LOOKAHEAD_S) {
+    spoken.add(next.s);
+    say(next.text, next.warn);
+    logSpoken(next.text, next.warn);
+  }
+}
+
+function setFix(state, text) {
+  const d = el("fixdot");
+  d.className = "dot" + (state === "live" ? " live" : state === "poor" ? " poor" : "");
+  el("fixtext").textContent = text;
+}
+
+function onFixError(err) {
+  setFix("off", "GPS unavailable");
+  toast(err.code === 1
+    ? "Location permission denied — allow it in Settings ▸ Safari"
+    : "Can't get a GPS fix out here");
+}
+
+function toast(msg) {
+  const t = el("toast");
+  t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 3800);
+}
+
+// ---- lifecycle -----------------------------------------------------------
+
+async function startRide() {
+  // iOS only allows speech after a user gesture, so prime it inside the tap.
+  if ("speechSynthesis" in window) {
+    const warm = new SpeechSynthesisUtterance("Recce ready");
+    warm.volume = 1.0;
+    speechSynthesis.speak(warm);
+  }
+  try {
+    if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
+  } catch (e) { /* screen may still sleep; not fatal */ }
+
+  if (!navigator.geolocation) { toast("This browser has no GPS access"); return; }
+  document.body.classList.add("riding");
+  watchId = navigator.geolocation.watchPosition(onFix, onFixError, {
+    enableHighAccuracy: true, maximumAge: 1000, timeout: 15000
+  });
+}
+
+function endRide() {
+  if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+  watchId = null;
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+  spoken.clear(); lastIdx = null; dir = 0; lastFix = null; smoothSpeed = 0;
+  el("loglist").innerHTML = "";
+  document.body.classList.remove("riding");
+}
+
+document.addEventListener("visibilitychange", async () => {
+  if (document.visibilityState === "visible" && document.body.classList.contains("riding")
+      && "wakeLock" in navigator && !wakeLock) {
+    try { wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+  }
+});
+
+document.querySelectorAll(".mode").forEach(b => {
+  b.addEventListener("click", () => {
+    mode = b.dataset.mode;
+    document.querySelectorAll(".mode").forEach(o =>
+      o.setAttribute("aria-pressed", String(o === b)));
+  });
+});
+
+el("start").addEventListener("click", startRide);
+el("stop").addEventListener("click", endRide);
+el("mute").addEventListener("click", () => {
+  muted = !muted;
+  el("mute").textContent = muted ? "Unmute" : "Mute";
+  if (muted && "speechSynthesis" in window) speechSynthesis.cancel();
+});
+
+// ---- boot ----------------------------------------------------------------
+
+el("roadname").textContent = PACK.name;
+el("s-len").textContent = (PACK.length_m / 1000).toFixed(1) + " km";
+el("s-calls").textContent = PACK.callouts.length;
+el("s-warn").textContent = PACK.callouts.filter(c => c.warn).length;
+</script>
