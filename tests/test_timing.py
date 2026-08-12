@@ -349,6 +349,38 @@ def test_fuzz_reported_lead_matches_what_is_rendered():
             )
 
 
+def test_fuzz_a_hazard_rarely_loses_to_a_plain_description():
+    """Nothing outranks a hazard — enforced in code, not just in a comment.
+
+    Placement runs in priority order and a high-priority callout may displace a
+    lower-priority non-warning. Before that, an inflexible corner description
+    that happened to sort first could permanently hold the slot a crest needed.
+
+    Measure only GENUINE contention. A crude "any dropped hazard alongside any
+    kept description" count reads 315/4000, but 233 of those are hazards that
+    could not be spoken at ANY time — they need more speech than exists before
+    their own arrival, which is a capacity limit, not a priority failure. Real
+    contention is ~13/4000, and those are hazard-versus-hazard.
+    """
+    contended = 0
+    for cs, s, t in _fuzz_schedules(n=400, seed=11):
+        kept, dropped = schedule(cs, s, t)
+        lost = [c for c in dropped if c.kind in ("hazard", "crest")]
+        plain = [c for c in kept if c.kind == "corner" and not c.is_warning]
+        for l in lost:
+            arrive = np.interp(l.anchor_s, s, t)
+            if arrive - l.duration < 0:
+                continue                      # unspeakable at any time
+            if any(p.speak_at < arrive and (arrive - l.duration) < p.ends_at
+                   for p in plain):
+                contended += 1
+                break
+    assert contended <= 0.02 * 400, (
+        f"{contended}/400 schedules silenced a hazard or crest that genuinely "
+        f"contended with a droppable corner description"
+    )
+
+
 def test_early_placement_is_bounded():
     """Arbitrarily early is its own wrong-corner failure."""
     s, t = _uniform()

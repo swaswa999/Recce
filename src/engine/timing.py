@@ -190,11 +190,16 @@ def build_callouts(corners, loose_crests, max_chain=MAX_LINK_CHAIN,
 
 def schedule(callouts, s_grid, t_grid, mode="full", lead=LEAD_SECONDS,
              duration_fn=estimate_duration):
-    """Assign each callout a start time, resolving overlaps by priority.
+    """Assign each callout a start time.
 
-    Returns (kept, dropped). A callout is only dropped when it would collide
-    with something more important — and then the drop reason is recorded rather
-    than the callout silently vanishing.
+    Returns (kept, dropped), with a recorded reason on everything dropped.
+
+    Placement runs in PRIORITY order, not road order. Only warnings are flexible
+    enough to be moved, so processing by ideal time let an inflexible, droppable
+    corner description take a slot first and leave a hazard with nowhere to go —
+    a blind crest was dropped while a corner call six metres later was spoken.
+    High priority gets first pick, and can displace a lower-priority non-warning
+    that has already been placed.
 
     Pure: the input callouts are never mutated, so scheduling the same list at
     two verbosity levels (or twice with different duration estimates, as the
@@ -218,7 +223,9 @@ def schedule(callouts, s_grid, t_grid, mode="full", lead=LEAD_SECONDS,
         # ideal: finish `lead` seconds before arrival
         c.speak_at = max(0.0, arrive_of[id(c)] - lead - c.duration)
 
-    live.sort(key=lambda c: (c.speak_at, c.priority))
+    # Priority first. A hazard outranks a crest outranks a corner call; ties fall
+    # back to road order.
+    live.sort(key=lambda c: (c.priority, c.speak_at))
 
     GAP = 0.05
 
@@ -263,8 +270,12 @@ def schedule(callouts, s_grid, t_grid, mode="full", lead=LEAD_SECONDS,
         candidates = [ideal]
         if flexible:
             for k in others:
-                candidates.append(k.ends_at + GAP)                 # after
-                candidates.append(k.speak_at - c.duration - GAP)   # before
+                # abut exactly first — collides() is strict, so touching is
+                # legal. Proposing only k.ends_at + GAP dropped callouts whose
+                # remaining window was smaller than the 0.05 s pad.
+                candidates += [k.ends_at, k.ends_at + GAP,
+                               k.speak_at - c.duration,
+                               k.speak_at - c.duration - GAP]
         best = None
         for start in candidates:
             c.speak_at = max(0.0, start)   # never negative: render() would clip
@@ -292,13 +303,30 @@ def schedule(callouts, s_grid, t_grid, mode="full", lead=LEAD_SECONDS,
     for c in live:
         if place(c, kept, flexible=c.is_warning):
             kept.append(c)
-        elif c.is_warning:
+            continue
+
+        # Nothing legal. Before giving up, try displacing a lower-priority
+        # NON-warning that is already placed — "nothing outranks a hazard" has
+        # to be enforced here or it is only a comment. Without this a droppable
+        # corner description could permanently hold the slot a crest needed.
+        victim = next(
+            (k for k in sorted(kept, key=lambda k: -k.priority)
+             if k.priority > c.priority and not k.is_warning), None)
+        if victim is not None:
+            trial = [k for k in kept if k is not victim]
+            if place(c, trial, flexible=c.is_warning):
+                victim.dropped = (f"pre-empted by {c.kind} at "
+                                  f"{c.anchor_s:.0f} m")
+                dropped.append(victim)
+                kept = trial + [c]
+                continue
+
+        if c.is_warning:
             c.dropped = (f"no slot with lead >= 0 preserving road order "
                          f"(best {c.lead:.1f}s)")
-            dropped.append(c)
         else:
-            c.dropped = "collided with a higher-priority callout"
-            dropped.append(c)
+            c.dropped = "no slot with lead >= 0 preserving road order"
+        dropped.append(c)
 
     kept.sort(key=lambda c: c.speak_at)
     return kept, dropped
