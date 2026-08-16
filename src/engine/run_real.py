@@ -11,29 +11,28 @@ from geometry import lonlat_to_xy, node_spacing_stats
 from pipeline import analyze_to_script, elevation_report
 from features import road_features, node_arc_length
 
-# Below this node density the geometry cannot support trustworthy pacenotes:
-# resampling finer than the survey manufactures kinks that a short-window arc
-# fit reads as real curvature.
+# Road-level refusal is now a LAST RESORT, not the main gate. The real one is
+# per corner (corners.mark_shape_trust): it compares local node spacing to that
+# corner's own radius and suppresses shape modifiers, keeping direction and
+# severity. A single road-level median cannot tell a 15 m hairpin from a 100 m
+# sweeper, and at 12 m it refused Angeles Crest's 103 km outright.
 #
-# Measured over 100 decimation phases of the answer-key road (10 phases is not
-# enough — it straddles the onset and reads clean): false "opens" is 0/100
-# through 14 m, then 3/100 at 16 m, 11/100 at 18 m, 29/100 at 20 m. When it
-# fires it lands on the real hairpin as "hairpin, opens", the most dangerous
-# string this engine can emit.
+# 40 m is where corner DETECTION itself becomes unreliable, which no per-corner
+# gate can rescue. Below it, sparse corners lose their modifiers rather than the
+# road being refused.
 #
-# 12 m keeps margin below the 16 m onset without refusing well-traced roads. A
-# gate that refuses every mountain road gets loosened or bypassed, and then the
-# false modifiers ship anyway.
-#
-# Provisional until Phase C calibrates on real OSM geometry — see
-# docs/ARCHITECTURE.md, "The information limit".
-MAX_TRUSTED_MEDIAN_SPACING = 12.0
+# The old 12 m figure came from decimating the ANSWER-KEY road, whose
+# instantaneous curvature steps are an artifact no built road has. Recalibrated
+# on synth_stress.py, which has real transition spirals: shape modifiers stay
+# correct to ~22 m even for a 14 m hairpin, and zero false modifiers appear
+# anywhere from 8 m through 40 m once the per-corner gate is applied.
+MAX_TRUSTED_MEDIAN_SPACING = 40.0
 
 # The median alone is not enough. The Tail of the Dragon has a 9.7 m median —
 # comfortably inside the gate — while 40% of its gaps exceed 12 m, p90 is 30 m
 # and the largest is 176 m. A road can pass on its median and still be
 # untrustworthy across a large fraction of its length.
-MAX_TRUSTED_P90_SPACING = 25.0
+MAX_TRUSTED_P90_SPACING = 45.0
 
 
 def main(path, force=False):

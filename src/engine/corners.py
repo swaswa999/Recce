@@ -2,7 +2,7 @@
 import numpy as np
 from dataclasses import dataclass, field
 
-from geometry import confined_arc_profile
+from geometry import confined_arc_profile, max_safe_spacing
 
 # Radius (m) -> severity. Rally convention: 6 = fastest, 1 = slowest, plus hairpin.
 # Tuned for road riding; these thresholds are THE tuning knobs.
@@ -43,6 +43,8 @@ class Corner:
     profile: object = None   # refined radius samples, set by refine_corners()
     refined: bool = False    # False means we fell back to the coarse estimate
     edge_margin: int = 0     # samples per end whose fit window is one-sided
+    node_gap: float = 0.0    # median RAW node spacing across this corner
+    shape_trusted: bool = True   # False: too sparse to call tightens/opens
 
     @property
     def length(self):
@@ -140,6 +142,31 @@ def refine_corners(corners, s_seg, s_fine, x_fine, y_fine, spacing_fine,
     return corners
 
 
+def mark_shape_trust(corners, node_s):
+    """Decide per corner whether the mapping is dense enough to call its SHAPE.
+
+    Gating whole roads on one median cannot tell a 15 m hairpin from a 100 m
+    sweeper, and 20 m spacing is fatal for the first and ample for the second.
+    Statewide that refused Angeles Crest (103 km, mapped at 17.4 m) entirely
+    while its long-radius corners were perfectly measurable.
+
+    Degrade rather than silence. Measurement shows the modifiers break well
+    before the radius does, so a sparse corner keeps its direction and severity
+    — "right 3" — and loses only "tightens"/"opens". Those are the callouts that
+    turn dangerous when wrong; a corner the rider is told about but not fully
+    described is still far better than silence.
+    """
+    node_s = np.asarray(node_s, dtype=float)
+    for c in corners:
+        inside = node_s[(node_s >= c.s0) & (node_s <= c.s1)]
+        if len(inside) < 2:
+            c.node_gap = float(c.length)
+        else:
+            c.node_gap = float(np.median(np.diff(inside)))
+        c.shape_trusted = c.node_gap <= max_safe_spacing(c.min_radius)
+    return corners
+
+
 def add_shape_modifiers(corners, s, r_smooth):
     """tightens / opens / long, based on radius profile through the corner.
 
@@ -168,7 +195,7 @@ def add_shape_modifiers(corners, s, r_smooth):
         margin = c.edge_margin if c.profile is not None else 0
         if margin and len(seg) > 2 * margin + 6:
             seg = seg[margin:-margin]
-        if len(seg) >= 6:
+        if len(seg) >= 6 and c.shape_trusted:
             third = max(2, len(seg) // 3)
             r_in = np.min(seg[:third])
             r_out = np.min(seg[-third:])

@@ -260,6 +260,30 @@ def elevation_quality(z_raw, z_grid, spacing):
     return quantum, p95, "ok"
 
 
+def max_safe_spacing(radius):
+    """Coarsest node spacing at which a corner of this radius can still be
+    trusted to yield shape modifiers.
+
+    Measured on synth_stress.py, decimating at 16 phases per spacing and taking
+    the point where a wrong modifier appears on 25% of phases:
+
+        R=14 m -> 22 m      R=38 m -> 34 m      R=100 m -> 38 m
+        R=20 m -> 23 m      R=45 m -> 35 m
+
+    Safe spacing grows only weakly with radius, so this is a shallow line rather
+    than the proportional d/R rule the geometry suggests. The constants sit
+    below every measured breaking point.
+
+    Calibrated on the STRESS road, not the answer-key road. The answer-key road
+    has instantaneous curvature steps — no transition spirals — which decimation
+    turns into artifacts no real road produces, and calibrating on it gave a 12 m
+    threshold roughly half what realistic geometry supports. Real roads are
+    built with spirals.
+    """
+    r = float(np.abs(radius))
+    return float(np.clip(18.0 + 0.15 * r, 18.0, 32.0))
+
+
 def node_spacing_stats(x, y):
     """Spacing of the RAW input nodes, before any resampling.
 

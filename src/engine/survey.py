@@ -25,9 +25,17 @@ import osmium
 RIDEABLE = {"primary", "secondary", "tertiary", "unclassified",
             "primary_link", "secondary_link", "tertiary_link"}
 
-# Same thresholds the per-road gate uses, so the survey and the runtime agree.
-MAX_TRUSTED_MEDIAN_SPACING = 12.0
-MAX_TRUSTED_P90_SPACING = 25.0
+# Road-level thresholds, now only a coarse screen. The real gate is per corner
+# (corners.mark_shape_trust), which compares local spacing to that corner's own
+# radius and suppresses shape modifiers rather than refusing the road.
+#
+# Measured on synth_stress.py: shape modifiers stay correct to ~22 m even for a
+# 14 m hairpin, and beyond that the per-corner gate suppresses them rather than
+# emitting anything wrong — zero false modifiers from 8 m through 40 m. Above
+# ~40 m the geometry is degraded enough that corner DETECTION itself is
+# unreliable, which no per-corner gate can rescue.
+MAX_TRUSTED_MEDIAN_SPACING = 25.0
+MAX_TRUSTED_P90_SPACING = 45.0
 
 
 def _hav_len(lons, lats):

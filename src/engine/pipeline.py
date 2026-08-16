@@ -13,7 +13,7 @@ import numpy as np
 from geometry import (resample, signed_radius, smooth_radius, elevation_quality,
                       SEG_SPACING, FINE_SPACING)
 from corners import (find_corners, refine_corners, add_shape_modifiers,
-                     find_crests, attach_crests, link_corners)
+                     mark_shape_trust, find_crests, attach_crests, link_corners)
 from script_gen import build_script
 
 
@@ -42,6 +42,12 @@ def analyze(x, y, z=None, seg_spacing=SEG_SPACING, fine_spacing=FINE_SPACING):
     seed_w = max(1, int(round(10.0 / fine_spacing)))
     seed_f = np.abs(signed_radius(xf, yf, window=seed_w))
     corners = refine_corners(corners, s, sf, xf, yf, fine_spacing, seed_f)
+
+    # Raw node arc-length, for judging how densely each corner is actually
+    # mapped. Must come from the ORIGINAL nodes, not the resampled grid, which
+    # is uniform by construction and says nothing about the survey.
+    raw_s = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(x), np.diff(y)))])
+    corners = mark_shape_trust(corners, raw_s)
 
     corners = add_shape_modifiers(corners, s, r_seg)
     crests = find_crests(s, zi)
