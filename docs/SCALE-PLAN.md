@@ -102,23 +102,50 @@ measurement says so.
 **Done when:** replaying a recorded GPS trace across a junction picks the right road
 throughout, with zero flapping, and going the wrong way up a road announces nothing.
 
-## Blocker 4 — Tiled packs and offline regions
+## Blocker 4 — Tiled packs and offline regions ❌ NOT NEEDED
 
-Proximity loading conflicts directly with the constraint that made the current build
-work: **it must survive dead zones**, which is exactly where these roads are.
+Measured rather than assumed, and the answer removed the blocker.
 
-Resolve it the way offline maps do — proximity *within* a downloaded area:
+Surveying the Bay Area (36.9–37.9 N, 122.6–121.6 W) from the California PBF:
 
-- Preprocess into tiles (~0.1° ≈ 11 × 9 km). At statewide volume that is a few tens
-  of KB per tile.
-- The rider downloads a **region** once on wifi ("Bay Area", "Sierra") — a few MB.
-- At ride time the app selects tiles by proximity from what it already holds. No
-  route picked, no signal needed.
+| | roads | length | pack size |
+| --- | --- | --- | --- |
+| All rideable-class roads | 9,790 | 5,900 km | 11.3 MB |
+| **Passing both quality gates** | **506** | **370 km** | **0.7 MB** |
 
-This keeps the "just works" behaviour while never depending on coverage mid-ride.
+An entire riding region is under a megabyte. There is nothing to tile, evict, or
+prefetch — **ship the region, or the whole state, and be done**. That deletes cache
+management, partial-coverage states, and every failure mode where the network is
+needed mid-ride.
 
-**Done when:** with the phone in airplane mode after a region download, riding into an
-adjacent tile produces callouts with no interaction.
+### The quality gate is also a curvy-road filter
+
+6% passing looks alarming until you see what passed: Mount Hamilton Road, La Honda
+Road, Skyline Boulevard, Calaveras Road, Highland Way, San Antonio Valley Road,
+Jamison Creek Road, Pinehurst Road. That is a list of the Bay Area's riding roads.
+
+The mechanism is that mappers add nodes to represent curves, so **node density is
+itself a proxy for curviness**. The 94% rejected are straight suburban and rural
+connectors — roads with no curvature to lose and nothing worth saying about. The gate
+built to protect against optimistic severity turns out to select exactly the roads the
+product exists for.
+
+Two consequences: the gate should not be loosened to raise coverage, because coverage
+is not the goal; and a road that fails should simply be absent, which is already the
+behaviour.
+
+## Blocker 4b — What replaces it
+
+With the whole region on the phone, "works wherever I am" needs only:
+
+- **A region bundle** downloaded once on wifi, holding every qualifying road.
+- **Opportunistic top-up** if the bundle is ever partial — never blocking. Patchy
+  signal extends reach; it is never required to speak.
+- **Honest edges.** Outside the loaded set the app says so, rather than going quiet in
+  a way that reads as "no corners here".
+
+**Done when:** in airplane mode, riding from one road onto another produces callouts
+with no interaction and no route chosen.
 
 ## Blocker 5 — Which roads qualify
 
