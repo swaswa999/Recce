@@ -9,6 +9,7 @@ import numpy as np
 
 from geometry import lonlat_to_xy, node_spacing_stats
 from pipeline import analyze_to_script, elevation_report
+from features import road_features, node_arc_length
 
 # Below this node density the geometry cannot support trustworthy pacenotes:
 # resampling finer than the survey manufactures kinks that a short-window arc

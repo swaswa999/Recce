@@ -20,6 +20,7 @@ import numpy as np
 from geometry import lonlat_to_xy
 from pipeline import analyze
 from timing import build_callouts
+from features import road_features
 
 
 def build_pack(path, name=None, precision=5):
@@ -31,12 +32,14 @@ def build_pack(path, name=None, precision=5):
     x, y = lonlat_to_xy(lon, lat)
 
     s, corners, loose = analyze(x, y, ele)
-    callouts = build_callouts(corners, loose)
 
     # Arc-length position of each raw node, so the player can turn a matched
     # node index into metres along the road without re-deriving the geometry.
     d = np.hypot(np.diff(x), np.diff(y))
     node_s = np.concatenate([[0.0], np.cumsum(d)])
+
+    feats = road_features(road, node_s)
+    callouts = build_callouts(corners, loose, features=feats)
 
     return {
         "name": name or road.get("name", "road"),

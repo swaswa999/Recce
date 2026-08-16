@@ -31,7 +31,10 @@ CHAIN_WPS = 2.0
 
 # Lower number wins. A hazard interrupts a corner call; a corner call beats
 # traffic chatter. Nothing outranks a hazard.
-PRIORITY = {"hazard": 0, "crest": 1, "corner": 2, "info": 3}
+# "feature" is road furniture from OSM tags — bridge, tunnel, bump. It sits
+# above a corner call because it is a fact about the surface rather than an
+# estimate, and below a crest because a crest hides what is beyond it.
+PRIORITY = {"hazard": 0, "crest": 1, "feature": 1, "corner": 2, "info": 3}
 
 # Verbosity. Full speaks everything; Guardian speaks only what could hurt you.
 MODES = ("full", "highlights", "guardian")
@@ -90,6 +93,7 @@ class Callout:
     lead: float = 0.0    # actual seconds between end of speech and the corner
     short_lead: bool = False  # less lead than we wanted, but still usable
     unwarnable: bool = False  # lead below MIN_LEAD: too late to act on
+    force_warning: bool = False  # a warning whose text carries no warning word
 
     @property
     def priority(self):
@@ -105,8 +109,8 @@ class Callout:
         silently dropped. True by KIND for hazards and crests — a hazard's text
         ("caution, gravel") contains none of the corner-shape warning words, and
         keying only off text once let a hazard be discarded."""
-        return self.kind in ("hazard", "crest") or any(
-            w in self.text for w in WARNING_WORDS)
+        return (self.force_warning or self.kind in ("hazard", "crest")
+                or any(w in self.text for w in WARNING_WORDS))
 
 
 def estimate_duration(text, wps=WORDS_PER_SECOND):
@@ -127,7 +131,10 @@ def keep_for_mode(c, mode):
     """
     if mode == "full":
         return True
-    if c.kind in ("hazard", "crest"):
+    if c.kind in ("hazard", "crest", "feature"):
+        # Road furniture survives every mode. It is a fact from the map rather
+        # than an estimate, and it is rare enough (4 bridges on 30 km of CA-84)
+        # that keeping it cannot bury the corner calls.
         return True
     if c.is_warning:
         return True
@@ -139,7 +146,8 @@ def keep_for_mode(c, mode):
     raise ValueError(f"unknown verbosity mode: {mode!r}")
 
 
-def build_callouts(corners, loose_crests, max_chain=MAX_LINK_CHAIN,
+def build_callouts(corners, loose_crests, features=None,
+                   max_chain=MAX_LINK_CHAIN,
                    max_seconds=MAX_UTTERANCE_SECONDS):
     """Corners and crests into unscheduled callouts, in road order.
 
@@ -184,6 +192,12 @@ def build_callouts(corners, loose_crests, max_chain=MAX_LINK_CHAIN,
     for cs in loose_crests:
         out.append(Callout(anchor_s=cs, text="caution, blind crest",
                            kind="crest"))
+    for f in features or []:
+        # `warn` comes from the feature table, not from the text, because
+        # "bump" and "tunnel" contain none of the corner-shape warning words.
+        c = Callout(anchor_s=f["s"], text=f["text"], kind="feature")
+        c.force_warning = bool(f.get("warn"))
+        out.append(c)
     out.sort(key=lambda c: c.anchor_s)
     return out
 

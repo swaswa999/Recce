@@ -20,6 +20,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
+from elevation import sample_elevation
+
 OVERPASS_MIRRORS = (
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
@@ -85,20 +87,44 @@ def fetch_road(name, bbox, ref=None):
     if not ways:
         raise SystemExit("No ways found - check name/ref spelling and bbox.")
 
-    # Stitch ways end-to-end (roads are split into many OSM ways).
-    segments = [[(p["lon"], p["lat"]) for p in wy["geometry"]] for wy in ways]
+    # Stitch ways end-to-end (roads are split into many OSM ways). Each point
+    # carries its way's structure tag, so bridge and tunnel spans survive the
+    # reordering and reversing the stitch does.
+    segments = []
+    for wy in ways:
+        tags = wy.get("tags", {})
+        kind = "tunnel" if tags.get("tunnel") else (
+            "bridge" if tags.get("bridge") else "")
+        segments.append([(p["lon"], p["lat"], kind) for p in wy["geometry"]])
+    # Join on POSITION only. Points now carry a structure tag, so comparing the
+    # whole tuple would fail to join a bridge way to the ordinary way it meets —
+    # same coordinates, different tag — and silently drop half the road.
+    def at(p):
+        return (p[0], p[1])
+
+    def carry(point, incoming):
+        """Adjacent ways SHARE their endpoint node, and the join drops one copy
+        of it. Dropping the tagged copy shortens every structure by a node — on
+        CA-84 that made all four bridges measure 0-9 m and the culvert filter
+        then discarded the lot. Keep whichever copy carries a tag."""
+        return point if point[2] else (point[0], point[1], incoming[2])
+
     chain = segments.pop(0)
     changed = True
     while segments and changed:
         changed = False
         for i, seg in enumerate(segments):
-            if seg[0] == chain[-1]:
+            if at(seg[0]) == at(chain[-1]):
+                chain[-1] = carry(chain[-1], seg[0])
                 chain += seg[1:]
-            elif seg[-1] == chain[-1]:
+            elif at(seg[-1]) == at(chain[-1]):
+                chain[-1] = carry(chain[-1], seg[-1])
                 chain += seg[-2::-1]
-            elif seg[-1] == chain[0]:
+            elif at(seg[-1]) == at(chain[0]):
+                chain[0] = carry(chain[0], seg[-1])
                 chain = seg[:-1] + chain
-            elif seg[0] == chain[0]:
+            elif at(seg[0]) == at(chain[0]):
+                chain[0] = carry(chain[0], seg[0])
                 chain = seg[::-1][:-1] + chain
             else:
                 continue
@@ -107,10 +133,45 @@ def fetch_road(name, bbox, ref=None):
             break
     if segments:
         print(f"warning: {len(segments)} disconnected segments dropped "
-              "(road may have gaps in this bbox)")
+              "(road may have gaps in this bbox)", file=sys.stderr)
     lon = [p[0] for p in chain]
     lat = [p[1] for p in chain]
-    return lon, lat
+    structure = [p[2] for p in chain]
+    return lon, lat, structure
+
+
+# Point features worth a callout on two wheels. Extend this table to add more —
+# the fetch, snapping and callout path are all generic over it.
+POINT_FEATURES = {
+    "traffic_calming": {
+        "bump": "bump", "hump": "bump", "table": "bump", "cushion": "bump",
+    },
+}
+
+
+def fetch_point_features(bbox):
+    """Speed bumps and similar point hazards inside the bbox.
+
+    These are separate OSM NODES, not tags on the road way, so they need their
+    own query and then snapping onto the road.
+    """
+    s, w, n, e = bbox
+    clauses = "".join(
+        f'node["{key}"]({s},{w},{n},{e});' for key in POINT_FEATURES)
+    try:
+        data = overpass(f"[out:json][timeout:120];({clauses});out;")
+    except SystemExit as exc:
+        print(f"point features unavailable: {exc}", file=sys.stderr)
+        return []
+    out = []
+    for el in data.get("elements", []):
+        tags = el.get("tags", {})
+        for key, mapping in POINT_FEATURES.items():
+            label = mapping.get(tags.get(key))
+            if label:
+                out.append({"lon": el["lon"], "lat": el["lat"], "type": label})
+                break
+    return out
 
 
 def _epqs_point(lonlat, retries=2):
@@ -165,6 +226,29 @@ def fetch_elevation_3dep(lon, lat, workers=8):
     return [float(v) for v in vals]
 
 
+def snap_points_to_road(lon, lat, points, max_off_m=25.0):
+    """Attach point features to the nearest road node.
+
+    The bbox query returns everything in the rectangle, including bumps on side
+    streets, so anything further than `max_off_m` from this road is discarded —
+    a speed-bump callout for a road you are not on is worse than none.
+    """
+    if not points:
+        return []
+    lat0 = np.radians(float(np.mean(lat)))
+    rx = np.array(lon) * 111320.0 * np.cos(lat0)
+    ry = np.array(lat) * 110540.0
+    out = []
+    for p in points:
+        px = p["lon"] * 111320.0 * np.cos(lat0)
+        py = p["lat"] * 110540.0
+        d = np.hypot(rx - px, ry - py)
+        i = int(np.argmin(d))
+        if float(d[i]) <= max_off_m:
+            out.append({"i": i, "type": p["type"]})
+    return out
+
+
 def fetch_elevation(lon, lat, batch=100):
     """Open-Elevation lookup (SRTM). For production, read SRTM tiles locally.
 
@@ -201,13 +285,24 @@ if __name__ == "__main__":
         out_path = sys.argv[sys.argv.index("-o") + 1]
 
     print(f"fetching '{ref or name}' from OSM...")
-    lon, lat = fetch_road(name, bbox, ref)
-    print(f"  {len(lon)} points")
+    lon, lat, structure = fetch_road(name, bbox, ref)
+    spans = sum(1 for a, b in zip(structure, structure[1:]) if a != b and b)
+    print(f"  {len(lon)} points, {spans} bridge/tunnel span(s)")
 
-    # 3DEP first: Open-Elevation's integer-metre heights are unfit for crest
-    # detection and get the whole crest channel suppressed downstream.
-    print(f"fetching elevation from USGS 3DEP ({len(lon)} points)...")
-    ele = fetch_elevation_3dep(lon, lat)
+    print("fetching point features (speed bumps)...")
+    points = fetch_point_features(bbox)
+    snapped = snap_points_to_road(lon, lat, points)
+    print(f"  {len(snapped)} on this road (of {len(points)} in the box)")
+
+    # Raster first: 1426 nodes/sec against 4.7 for the point API, same source,
+    # and it agrees to a median of 0.25 m. The point API remains as a fallback
+    # for when a tile cannot be reached.
+    print(f"sampling elevation from 3DEP rasters ({len(lon)} points)...")
+    ele = sample_elevation(lon, lat)
+    if ele is None:
+        print("raster unavailable; falling back to 3DEP point queries "
+              "(slow: minutes, not seconds)")
+        ele = fetch_elevation_3dep(lon, lat)
     if ele is None:
         print("falling back to Open-Elevation (crest detection will likely be "
               "suppressed — see docs/ARCHITECTURE.md)")
@@ -216,5 +311,6 @@ if __name__ == "__main__":
         print("\n*** NO ELEVATION: crest warnings will be absent from this road.")
         print("*** That is a missing safety callout, not an absence of crests.\n")
     with open(out_path, "w") as f:
-        json.dump({"name": name, "lon": lon, "lat": lat, "ele": ele}, f)
+        json.dump({"name": name, "lon": lon, "lat": lat, "ele": ele,
+                   "structure": structure, "points": snapped}, f)
     print(f"wrote {out_path} - now run: python3 run_real.py {out_path}")
