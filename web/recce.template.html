@@ -158,7 +158,15 @@
   .stage {
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    padding: 20px; text-align: center; gap: 18px;
+    padding: 20px; text-align: center; gap: 14px;
+  }
+
+  /* Which road we believe we are on. Small — it confirms the match without
+     competing with the callout, which is the thing being read at speed. */
+  #roadnow {
+    color: var(--amber); margin: 0;
+    max-width: 90vw; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   #calltext {
@@ -223,18 +231,18 @@
   </div>
 
   <p class="lede">
-    Your phone tracks where you are and speaks each corner a few seconds before
-    you reach it — direction, severity, and what the corner does. Pair a helmet
-    intercom and put the phone away.
+    Your phone works out which road you are on and speaks each corner a few
+    seconds before you reach it — direction, severity, and what the corner does.
+    No route to choose. Pair a helmet intercom and put the phone away.
   </p>
 
   <div class="card">
-    <div class="label">Loaded road</div>
+    <div class="label">Loaded region</div>
     <p class="roadname" id="roadname">—</p>
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="label">Length</div><b id="s-len">—</b></div>
+    <div class="stat"><div class="label">Roads</div><b id="s-len">—</b></div>
     <div class="stat"><div class="label">Callouts</div><b id="s-calls">—</b></div>
     <div class="stat"><div class="label">Warnings</div><b id="s-warn">—</b></div>
   </div>
@@ -279,6 +287,7 @@
   </div>
 
   <div class="stage">
+    <p class="label" id="roadnow">—</p>
     <p id="calltext" class="idle">Locating you on the road…</p>
     <p id="dist"></p>
   </div>
@@ -297,7 +306,7 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const PACK = __PACK__;
+const BUNDLE = __PACK__;
 
 // Speak so the callout FINISHES this many seconds before the corner. A rider
 // still hearing the description while turning in has been told too late.
@@ -307,34 +316,115 @@ const LEAD_SECONDS = 3.0;
 const MAX_LOOKAHEAD_S = 12.0;
 const RANK_LIMIT = { full: 99, highlights: 4, guardian: 2 };
 
+// Matcher constants, mirroring src/engine/matcher.py.
+const MAX_OFFROAD_M = 60.0;
+const HEADING_PENALTY_M = 120.0;   // distance-equivalent cost of being 90 deg out
+const MIN_SPEED_FOR_HEADING = 2.5; // below this, GPS heading is noise
+const SWITCH_PATIENCE = 3;         // consecutive wins before a challenger takes over
+
 const el = id => document.getElementById(id);
 let mode = "full", muted = false, watchId = null, wakeLock = null;
-let lastIdx = null, dir = 0, spoken = new Set(), speaking = false;
-let lastFix = null, smoothSpeed = 0;
+let spoken = new Set(), speaking = false, smoothSpeed = 0, lastFix = null;
+let curRoad = null, challenger = null, challengerHits = 0, dir = 0, lastS = null;
 
 // ---- geometry ------------------------------------------------------------
 
-const R = 6371000, D2R = Math.PI / 180;
-const lat0 = PACK.lat[0] * D2R;
-const mx = lon => lon * D2R * R * Math.cos(lat0);
-const my = lat => lat * D2R * R;
-const NX = PACK.lon.map(mx), NY = PACK.lat.map(my);
+const D2R = Math.PI / 180;
+const LAT0 = BUNDLE.roads.length ? BUNDLE.roads[0].lat[0] : 37;
+const MLON = 111320 * Math.cos(LAT0 * D2R), MLAT = 110540;
+const XY = BUNDLE.roads.map(r => ({
+  x: r.lon.map(v => v * MLON),
+  y: r.lat.map(v => v * MLAT),
+}));
 
-// Match to the nearest node, searching near the last match once locked. The
-// Dragon doubles back on itself, so a global nearest-node search can jump to a
-// switchback running the other way a few metres across the hillside.
-function matchNode(x, y) {
-  let lo = 0, hi = NX.length - 1;
-  if (lastIdx !== null) {
-    lo = Math.max(0, lastIdx - 120);
-    hi = Math.min(NX.length - 1, lastIdx + 120);
+function candidates(lon, lat) {
+  const c = BUNDLE.cell;
+  const gy = Math.floor(lat / c), gx = Math.floor(lon / c);
+  const out = [];
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) {
+      const cell = BUNDLE.index[(gy + dy) + "," + (gx + dx)];
+      if (cell) for (const pair of cell) out.push(pair);
+    }
+  return out;
+}
+
+// Perpendicular distance to the segments touching this node, plus a heading
+// penalty. Distance alone picks the wrong road at an overpass, beside a
+// frontage road, or on a switchback that doubles back within metres.
+function scoreAt(ri, ni, px, py, heading) {
+  const R = BUNDLE.roads[ri], G = XY[ri], n = G.x.length;
+  let best = null;
+  for (const a of [ni - 1, ni]) {
+    if (a < 0 || a + 1 >= n) continue;
+    const ax = G.x[a], ay = G.y[a], vx = G.x[a + 1] - ax, vy = G.y[a + 1] - ay;
+    const L2 = vx * vx + vy * vy;
+    if (L2 <= 1e-9) continue;
+    let tt = ((px - ax) * vx + (py - ay) * vy) / L2;
+    tt = Math.max(0, Math.min(1, tt));
+    const dist = Math.hypot(px - (ax + tt * vx), py - (ay + tt * vy));
+    const s = R.node_s[a] + tt * (R.node_s[a + 1] - R.node_s[a]);
+    let pen = 0;
+    if (heading !== null) {
+      const bearing = Math.atan2(vy, vx);
+      let err = Math.abs(Math.atan2(Math.sin(heading - bearing),
+                                    Math.cos(heading - bearing)));
+      err = Math.min(err, Math.PI - err);   // a road is bidirectional
+      pen = HEADING_PENALTY_M * (err / (Math.PI / 2));
+    }
+    if (best === null || dist + pen < best.score)
+      best = { score: dist + pen, dist, s };
   }
-  let best = -1, bestD = Infinity;
-  for (let i = lo; i <= hi; i++) {
-    const dx = NX[i] - x, dy = NY[i] - y, d = dx * dx + dy * dy;
-    if (d < bestD) { bestD = d; best = i; }
+  return best;
+}
+
+// Returns {road, s, dist} or null when off-network. Hysteresis: a challenger
+// must win SWITCH_PATIENCE consecutive fixes, otherwise two roads a few metres
+// apart trade the lead on GPS noise and every corner is re-announced.
+function matchRoad(lon, lat, heading, speed) {
+  if (speed !== null && speed < MIN_SPEED_FOR_HEADING) heading = null;
+  const px = lon * MLON, py = lat * MLAT;
+  const best = new Map();
+  for (const [ri, ni] of candidates(lon, lat)) {
+    const got = scoreAt(ri, ni, px, py, heading);
+    if (!got) continue;
+    const cur = best.get(ri);
+    if (!cur || got.score < cur.score) best.set(ri, got);
   }
-  return { idx: best, dist: Math.sqrt(bestD) };
+  if (!best.size) { challenger = null; challengerHits = 0; return null; }
+
+  let topRi = null, top = null;
+  for (const [ri, g] of best) if (!top || g.score < top.score) { top = g; topRi = ri; }
+  if (top.dist > MAX_OFFROAD_M) { challenger = null; challengerHits = 0; return null; }
+
+  const mine = curRoad !== null ? best.get(curRoad) : null;
+  if (curRoad === null) {
+    commitRoad(topRi);
+  } else if (topRi === curRoad) {
+    challenger = null; challengerHits = 0;
+  } else if (mine && mine.dist <= MAX_OFFROAD_M) {
+    if (challenger === topRi) challengerHits++;
+    else { challenger = topRi; challengerHits = 1; }
+    if (challengerHits >= SWITCH_PATIENCE) commitRoad(topRi);
+  } else {
+    commitRoad(topRi);
+  }
+
+  const g = best.get(curRoad) || top;
+  lastS = g.s;
+  return { road: curRoad, s: g.s, dist: g.dist };
+}
+
+function commitRoad(ri) {
+  if (ri !== curRoad) {
+    curRoad = ri;
+    // Corners already spoken belong to the road we just left. Keeping them
+    // would silence the new road's callouts as "already said".
+    spoken.clear();
+    dir = 0;
+    el("roadnow").textContent = BUNDLE.roads[ri].name || "unnamed road";
+  }
+  challenger = null; challengerHits = 0;
 }
 
 function eligible(c) {
@@ -368,48 +458,48 @@ function logSpoken(text, isWarning) {
 // ---- ride loop -----------------------------------------------------------
 
 function onFix(pos) {
-  const x = mx(pos.coords.longitude), y = my(pos.coords.latitude);
-  const m = matchNode(x, y);
+  const lon = pos.coords.longitude, lat = pos.coords.latitude;
   const acc = pos.coords.accuracy || 99;
 
-  // Off the road, or a fix too poor to trust: say nothing rather than guess.
-  if (m.idx < 0 || m.dist > 60) {
-    setFix("off", `Off route — ${Math.round(m.dist)} m`);
+  let v = pos.coords.speed;
+  if (v === null || isNaN(v) || v < 0) v = smoothSpeed;
+  smoothSpeed = smoothSpeed ? smoothSpeed * 0.7 + v * 0.3 : v;
+
+  // GPS heading is reported clockwise from north; the bundle is ENU.
+  let heading = null;
+  if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
+    const b = pos.coords.heading * Math.PI / 180;
+    heading = Math.atan2(Math.cos(b), Math.sin(b));
+  }
+
+  const m = matchRoad(lon, lat, heading, smoothSpeed);
+  if (!m) {
+    setFix("off", "No mapped road here");
     el("calltext").className = "idle";
-    el("calltext").textContent = "Off the loaded road";
+    el("calltext").textContent = "Off the mapped network";
     el("dist").textContent = "";
+    el("roadnow").textContent = "—";
     lastFix = null;
     return;
   }
   setFix(acc <= 20 ? "live" : "poor",
-         acc <= 20 ? "Tracking" : `Weak GPS ±${Math.round(acc)} m`);
-
-  if (lastIdx !== null && m.idx !== lastIdx) dir = Math.sign(m.idx - lastIdx) || dir;
-  lastIdx = m.idx;
-  const s = PACK.node_s[m.idx];
-
-  // Speed: prefer the GPS's own, fall back to differencing positions.
-  let v = pos.coords.speed;
-  if (v === null || isNaN(v) || v < 0) {
-    if (lastFix) {
-      const dt = (pos.timestamp - lastFix.t) / 1000;
-      if (dt > 0.2) v = Math.abs(s - lastFix.s) / dt;
-    }
-  }
-  if (v === null || isNaN(v)) v = 0;
-  smoothSpeed = smoothSpeed ? smoothSpeed * 0.7 + v * 0.3 : v;
-  lastFix = { t: pos.timestamp, s };
+         acc <= 20 ? "Tracking" : "Weak GPS ±" + Math.round(acc) + " m");
   el("spd").textContent = Math.round(smoothSpeed * 3.6);
 
-  // Next callout ahead in the direction of travel.
-  const ahead = PACK.callouts
-    .filter(c => eligible(c) && !spoken.has(c.s) &&
-                 (dir >= 0 ? c.s > s : c.s < s))
+  const road = BUNDLE.roads[m.road], s = m.s;
+  if (lastFix && lastFix.road === m.road) {
+    const ds = s - lastFix.s;
+    if (Math.abs(ds) > 3) dir = Math.sign(ds);
+  }
+  lastFix = { road: m.road, s };
+
+  const ahead = road.callouts
+    .filter(c => eligible(c) && !spoken.has(c.s) && (dir >= 0 ? c.s > s : c.s < s))
     .sort((a, b) => dir >= 0 ? a.s - b.s : b.s - a.s);
 
   if (!ahead.length) {
     el("calltext").className = "idle";
-    el("calltext").textContent = "No more callouts ahead";
+    el("calltext").textContent = "No more callouts this way";
     el("dist").textContent = "";
     return;
   }
@@ -422,8 +512,6 @@ function onFix(pos) {
   el("calltext").textContent = next.text;
   el("dist").innerHTML = Math.round(gap) + "<span>m</span>";
 
-  // Speak when the rider is LEAD_SECONDS away, allowing for how long the
-  // phrase takes to say. Words-per-second is deliberately pessimistic.
   const speakSecs = Math.max(0.6, next.text.split(" ").length / 2.2);
   if (eta <= LEAD_SECONDS + speakSecs && eta <= MAX_LOOKAHEAD_S) {
     spoken.add(next.s);
@@ -476,7 +564,8 @@ function endRide() {
   watchId = null;
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
   if ("speechSynthesis" in window) speechSynthesis.cancel();
-  spoken.clear(); lastIdx = null; dir = 0; lastFix = null; smoothSpeed = 0;
+  spoken.clear(); curRoad = null; challenger = null; challengerHits = 0;
+  dir = 0; lastFix = null; lastS = null; smoothSpeed = 0;
   el("loglist").innerHTML = "";
   document.body.classList.remove("riding");
 }
@@ -506,8 +595,9 @@ el("mute").addEventListener("click", () => {
 
 // ---- boot ----------------------------------------------------------------
 
-el("roadname").textContent = PACK.name;
-el("s-len").textContent = (PACK.length_m / 1000).toFixed(1) + " km";
-el("s-calls").textContent = PACK.callouts.length;
-el("s-warn").textContent = PACK.callouts.filter(c => c.warn).length;
+el("roadname").textContent = BUNDLE.name;
+el("s-len").textContent = BUNDLE.roads.length + " roads";
+el("s-calls").textContent = BUNDLE.roads.reduce((a, r) => a + r.callouts.length, 0);
+el("s-warn").textContent = BUNDLE.roads.reduce(
+  (a, r) => a + r.callouts.filter(c => c.warn).length, 0);
 </script>
