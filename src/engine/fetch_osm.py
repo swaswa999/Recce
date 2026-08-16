@@ -41,18 +41,32 @@ def _post(url, data, content_type, timeout=120):
         return json.load(resp)
 
 
-def overpass(query):
-    """POST a query, trying mirrors in turn. Overpass rate-limits and 504s under
-    load, so a single failure is not a reason to give up."""
+def overpass(query, attempts=2):
+    """POST a query, trying each mirror in turn and then retrying the round.
+
+    Overpass 504s and times out under load rather than because the query is
+    wrong, so one failure is not a reason to give up. A wide bounding box makes
+    it far likelier: CA 84 over a box reaching into Woodside is 167 ways and
+    times out, while the twisty section alone is 16 ways and returns in ~30 s.
+    Narrow the box before blaming the server.
+
+    Errors go to stderr so a failed fetch is still visible when stdout is piped,
+    and the exit status is non-zero — a run that reported success on a failed
+    fetch is how a missing road file first surfaced.
+    """
     body = urllib.parse.urlencode({"data": query}).encode()
     last = None
-    for url in OVERPASS_MIRRORS:
-        try:
-            return _post(url, body, "application/x-www-form-urlencoded")
-        except Exception as exc:  # noqa: BLE001 - report and try the next mirror
-            last = exc
-            print(f"  {url.split('/')[2]}: {type(exc).__name__} {exc}")
-    raise SystemExit(f"all Overpass mirrors failed; last error: {last}")
+    for attempt in range(attempts):
+        for url in OVERPASS_MIRRORS:
+            try:
+                return _post(url, body, "application/x-www-form-urlencoded")
+            except Exception as exc:  # noqa: BLE001 - report and try the next
+                last = exc
+                print(f"  {url.split('/')[2]}: {type(exc).__name__} {exc}",
+                      file=sys.stderr)
+    raise SystemExit(
+        f"all Overpass mirrors failed after {attempts} rounds; last error: "
+        f"{last}\nIf this is a 504 or a timeout, try a smaller bounding box.")
 
 
 def fetch_road(name, bbox, ref=None):
