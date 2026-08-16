@@ -172,17 +172,36 @@ decimation study puts false-`opens` onset at 16 m, reaching 29% of phases at 20 
 both. Angeles Crest is a fast mountain highway whose corners are mostly long-radius,
 which 17 m spacing measures fine.
 
-**Fix: gate per corner, relative to that corner's radius.** A corner is measurable
-when local node spacing is small against its own radius. This admits Angeles Crest's
-sweepers, still refuses a hairpin mapped at 20 m, and lets a road be partially
-covered — callouts where the data supports them, silence where it does not.
+**Fixed** in `corners.mark_shape_trust()` + `geometry.max_safe_spacing()`. A corner
+keeps its direction and severity always; it loses only `tightens`/`opens` when local
+node spacing is too coarse for its radius. Radius survives decimation far better than
+the modifiers do, so silence was the wrong degradation.
 
-Note this reverses nothing about safety: it is strictly more discriminating than the
-current gate, not more permissive. A road-level median cannot see that one hairpin on
-an otherwise well-mapped road is unmeasurable; a per-corner gate can.
+Threshold derived by decimating `synth_stress.py` at 16 phases per spacing:
 
-Needs implementing and then re-validating against the decimation study, because the
-onset figures there were measured with a uniform gap and a 12 m hairpin.
+| radius | max safe spacing | | radius | max safe spacing |
+| --- | --- | --- | --- | --- |
+| 14 m | 22 m | | 45 m | 35 m |
+| 20 m | 23 m | | 100 m | 38 m |
+| 38 m | 34 m | | | |
+
+**Result: 2,244 km -> 21,855 km statewide, 9.7x more road, 41.8 MB.**
+
+| | roads | km | size |
+| --- | --- | --- | --- |
+| before (12 m road-level gate) | 2,423 | 2,244 | 4.3 MB |
+| after (per-corner gate) | 19,172 | 21,855 | 41.8 MB |
+
+Angeles Crest 1.1 -> 76.7 km. Ortega 0 -> 20.6 km. Palomar South Grade 0 -> 11.2 km.
+Mulholland 13.3 -> 21.3 km.
+
+Safety held: zero false modifiers from 8 m through 40 m, against modifiers breaking at
+22-38 m before. On real roads the gate is narrow and well-aimed — 6 of CA-84's 176
+corners, 2 of the Dragon's 260 — landing on tight corners with sparse nodes.
+
+The old 12 m figure was roughly half what realistic geometry supports, because it came
+from decimating the answer-key road, whose instantaneous curvature steps are an
+artifact no built road has.
 
 ## Blocker 5 — Which roads qualify
 
