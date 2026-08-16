@@ -147,6 +147,43 @@ With the whole region on the phone, "works wherever I am" needs only:
 **Done when:** in airplane mode, riding from one road onto another produces callouts
 with no interaction and no route chosen.
 
+## Blocker 5b — The gate's threshold is the wrong SHAPE
+
+Statewide, 2% of rideable road passes: 2,244 km, 4.3 MB. The Bay Area's famous roads
+are all present, but Southern California's are not — Angeles Crest contributes 1.1 km
+of its 103 km, and Palomar and Ortega are absent entirely.
+
+The cause is not what it looked like. It is not long straight sections diluting a
+road's statistics:
+
+| road | km | median gap | p90 | curvature |
+| --- | --- | --- | --- | --- |
+| Angeles Crest Highway | 103.3 | 17.4 m | 29.7 m | 255°/km |
+| Palomar East Grade | 18.1 | 22.2 m | 50.8 m | 343°/km |
+| Palomar South Grade | 19.2 | 20.5 m | 38.3 m | 410°/km |
+| Ortega Highway | 45.1 | 26.2 m | 43.8 m | 172°/km |
+
+These roads are intensely curvy **and** uniformly mapped at 17–26 m. La Honda is
+10.7 m and Skyline 6.5 m by comparison. The gate is correct to distrust them: the
+decimation study puts false-`opens` onset at 16 m, reaching 29% of phases at 20 m.
+
+**But a fixed 12 m threshold is the wrong shape.** 20 m spacing is catastrophic for a
+15 m hairpin and entirely adequate for a 100 m sweeper — the same number cannot judge
+both. Angeles Crest is a fast mountain highway whose corners are mostly long-radius,
+which 17 m spacing measures fine.
+
+**Fix: gate per corner, relative to that corner's radius.** A corner is measurable
+when local node spacing is small against its own radius. This admits Angeles Crest's
+sweepers, still refuses a hairpin mapped at 20 m, and lets a road be partially
+covered — callouts where the data supports them, silence where it does not.
+
+Note this reverses nothing about safety: it is strictly more discriminating than the
+current gate, not more permissive. A road-level median cannot see that one hairpin on
+an otherwise well-mapped road is unmeasurable; a per-corner gate can.
+
+Needs implementing and then re-validating against the decimation study, because the
+onset figures there were measured with a uniform gap and a 12 m hairpin.
+
 ## Blocker 5 — Which roads qualify
 
 Both roads processed so far *barely* pass, and CA-84 already fails the p90 check. If
