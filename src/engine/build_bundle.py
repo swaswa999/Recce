@@ -131,6 +131,15 @@ def road_from_chain(name, chain, with_elevation=True):
     if not corners:
         return None
 
+    # Corner extents for the map. The callout list only says where a call
+    # FIRES; drawing needs where each corner begins and ends, and how hard it
+    # is, so the line can be coloured along its actual length.
+    spans = [{"a": round(float(c.s0), 1), "b": round(float(c.s1), 1),
+              "rank": (0 if c.severity == "hairpin"
+                       else (c.severity if isinstance(c.severity, int) else 9))
+                      if rated else None}
+             for c in corners]
+
     if rated:
         from features import road_features
         feats = road_features({"structure": structure, "points": []}, node_s)
@@ -163,6 +172,7 @@ def road_from_chain(name, chain, with_elevation=True):
         "lon": [round(float(v), 5) for v in lon],
         "lat": [round(float(v), 5) for v in lat],
         "node_s": [round(float(v), 1) for v in node_s],
+        "spans": spans,
         "callouts": out_calls,
     }
 

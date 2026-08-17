@@ -154,11 +154,20 @@
   }
   .speed span { font-size: 12px; color: var(--muted); margin-left: 3px; }
 
-  /* The callout is the whole point — it gets the whole screen */
-  .stage {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    padding: 20px; text-align: center; gap: 14px;
+  /* The map fills the stage; the callout sits over it on a scrim, because the
+     words are what gets read at speed and must never lose contrast to the line
+     underneath. */
+  .stage { flex: 1; position: relative; overflow: hidden; }
+
+  #map { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  .readout {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 26px 20px 22px; text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    background: linear-gradient(to top,
+      rgba(11,16,19,0.96) 0%, rgba(11,16,19,0.88) 55%, rgba(11,16,19,0) 100%);
+    pointer-events: none;
   }
 
   /* Which road we believe we are on. Small — it confirms the match without
@@ -171,7 +180,7 @@
 
   #calltext {
     font-family: var(--mono); font-weight: 700;
-    font-size: clamp(30px, 11vw, 62px);
+    font-size: clamp(24px, 8.5vw, 46px);
     line-height: 1.08; letter-spacing: -0.02em;
     text-wrap: balance; margin: 0;
   }
@@ -180,7 +189,7 @@
 
   #dist {
     font-family: var(--mono); font-variant-numeric: tabular-nums;
-    font-size: clamp(38px, 14vw, 76px); font-weight: 300;
+    font-size: clamp(30px, 10vw, 54px); font-weight: 300;
     color: var(--amber); line-height: 1; margin: 0;
   }
   #dist span { font-size: 0.3em; color: var(--muted); margin-left: 6px; }
@@ -290,9 +299,12 @@
   </div>
 
   <div class="stage">
-    <p class="label" id="roadnow">—</p>
-    <p id="calltext" class="idle">Locating you on the road…</p>
-    <p id="dist"></p>
+    <canvas id="map" aria-hidden="true"></canvas>
+    <div class="readout">
+      <p class="label" id="roadnow">—</p>
+      <p id="calltext" class="idle">Locating you on the road…</p>
+      <p id="dist"></p>
+    </div>
   </div>
 
   <div class="log">
@@ -446,6 +458,128 @@ function eligible(c) {
   return c.rank <= RANK_LIMIT[mode];
 }
 
+// ---- map ------------------------------------------------------------------
+
+// Metres of road shown ahead of the rider. Enough to see the next few corners
+// without shrinking the line to nothing.
+const VIEW_AHEAD_M = 420;
+
+const cv = el("map");
+const ctx = cv.getContext("2d");
+let mapW = 0, mapH = 0, viewHeading = 0;
+
+function sizeMap() {
+  const dpr = window.devicePixelRatio || 1;
+  const r = cv.getBoundingClientRect();
+  mapW = r.width; mapH = r.height;
+  cv.width = Math.round(mapW * dpr);
+  cv.height = Math.round(mapH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+window.addEventListener("resize", sizeMap);
+
+// Severity to colour. Rank runs 0 (hairpin) to 6 (barely a bend), so the ramp
+// is inverted: the hardest corner is the reddest. Unrated corners get grey —
+// they must not read as "easy", which is what any green would imply.
+function rankColor(rank) {
+  if (rank === null || rank === undefined || rank > 6) return "#8A9299";
+  const t = Math.max(0, Math.min(1, rank / 6));      // 0 hairpin .. 1 easy
+  const hue = 4 + t * 128;                            // 4 red .. 132 green
+  return `hsl(${hue}, 78%, 55%)`;
+}
+
+let mapScale = 1;
+
+// Rotate so the direction of travel points UP. A rider reads the screen against
+// what is in front of them, not against north.
+//
+// The rotation is (PI/2 - heading), not -heading: rotating by -heading maps the
+// travel direction onto +x, which sends the road off to the right of the screen
+// rather than up it.
+function project(px, py, cx, cy) {
+  const a = Math.PI / 2 - viewHeading;
+  const s = Math.sin(a), c = Math.cos(a);
+  const dx = px - cx, dy = py - cy;
+  const rx = dx * c - dy * s, ry = dx * s + dy * c;
+  return [mapW / 2 + rx * mapScale, mapH * 0.62 - ry * mapScale];
+}
+
+function drawMap(ri, s) {
+  if (!mapW) sizeMap();
+  const g = ctx.createLinearGradient(0, 0, 0, mapH);
+  g.addColorStop(0, "#12191E");
+  g.addColorStop(1, "#080C0F");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, mapW, mapH);
+  if (ri === null || ri === undefined) return;
+
+  mapScale = Math.min(mapW, mapH) / (VIEW_AHEAD_M * 1.5);
+  const road = BUNDLE.roads[ri], G = XY[ri];
+  const ns = road.node_s;
+
+  // Centre on the rider, and take heading from the road itself rather than the
+  // GPS: the line is what the rider sees, and a jittery compass would swing the
+  // whole view.
+  let i = 0;
+  while (i < ns.length - 2 && ns[i + 1] < s) i++;
+  const cx = G.x[i], cy = G.y[i];
+  const j = Math.min(i + 1, G.x.length - 1);
+  const hx = G.x[j] - G.x[i], hy = G.y[j] - G.y[i];
+  if (Math.hypot(hx, hy) > 0.5) {
+    // Riding the road backwards means the stored node order runs behind us.
+    const want = Math.atan2(hy, hx) + (dir < 0 ? Math.PI : 0);
+    // shortest-path smoothing, so the view eases round rather than snapping
+    let d = Math.atan2(Math.sin(want - viewHeading), Math.cos(want - viewHeading));
+    viewHeading += d * 0.25;
+  }
+
+  // Only the stretch within view, so a 30 km road costs nothing to draw.
+  const span = VIEW_AHEAD_M * 1.4;
+  let lo = i, hi = i;
+  while (lo > 0 && ns[i] - ns[lo] < span) lo--;
+  while (hi < ns.length - 1 && ns[hi] - ns[i] < span) hi++;
+
+  // Base line: the road itself, white.
+  ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.strokeStyle = "#EDF2F4";
+  ctx.lineWidth = 7;
+  ctx.beginPath();
+  for (let k = lo; k <= hi; k++) {
+    const [X, Y] = project(G.x[k], G.y[k], cx, cy);
+    k === lo ? ctx.moveTo(X, Y) : ctx.lineTo(X, Y);
+  }
+  ctx.stroke();
+
+  // Corners painted over it, green through red by severity.
+  ctx.lineWidth = 7;
+  for (const sp of (road.spans || [])) {
+    if (sp.b < ns[lo] || sp.a > ns[hi]) continue;
+    ctx.strokeStyle = rankColor(sp.rank);
+    ctx.beginPath();
+    let started = false;
+    for (let k = lo; k <= hi; k++) {
+      if (ns[k] < sp.a || ns[k] > sp.b) continue;
+      const [X, Y] = project(G.x[k], G.y[k], cx, cy);
+      started ? ctx.lineTo(X, Y) : (ctx.moveTo(X, Y), started = true);
+    }
+    if (started) ctx.stroke();
+  }
+
+  // The rider. Drawn last so nothing covers it.
+  const [PX, PY] = project(cx, cy, cx, cy);
+  ctx.beginPath();
+  ctx.arc(PX, PY, 13, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(56,142,255,0.22)";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(PX, PY, 7, 0, Math.PI * 2);
+  ctx.fillStyle = "#3B8CFF";
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = "#EDF2F4";
+  ctx.stroke();
+}
+
 // ---- speech --------------------------------------------------------------
 
 function say(text, isWarning) {
@@ -493,6 +627,7 @@ function onFix(pos) {
     el("calltext").textContent = "Off the mapped network";
     el("dist").textContent = "";
     el("roadnow").textContent = "—";
+    drawMap(null);
     lastFix = null;
     return;
   }
@@ -501,6 +636,7 @@ function onFix(pos) {
   el("spd").textContent = Math.round(smoothSpeed * 3.6);
 
   const road = BUNDLE.roads[m.road], s = m.s;
+  drawMap(m.road, s);
   if (lastFix && lastFix.road === m.road) {
     const ds = s - lastFix.s;
     if (Math.abs(ds) > 3) dir = Math.sign(ds);
@@ -576,6 +712,7 @@ async function startRide() {
 
   if (!navigator.geolocation) { toast("This browser has no GPS access"); return; }
   document.body.classList.add("riding");
+  requestAnimationFrame(() => { sizeMap(); drawMap(null); });
   watchId = navigator.geolocation.watchPosition(onFix, onFixError, {
     enableHighAccuracy: true, maximumAge: 1000, timeout: 15000
   });
