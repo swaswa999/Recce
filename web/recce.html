@@ -126,6 +126,15 @@
   }
   #start[disabled] { opacity: 0.45; }
 
+  #demo {
+    width: 100%; padding: 16px; margin-top: -10px;
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 4px;
+    font-family: var(--mono); font-size: 14px;
+    letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer;
+  }
+  #demo:hover { color: var(--ink); border-color: var(--muted); }
+
   :focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
 
   /* ---------- riding ---------- */
@@ -283,6 +292,7 @@
   </div>
 
   <button id="start">Start — I have read this</button>
+  <button id="demo">Watch a demo ride</button>
   <p class="lede" id="hint" style="font-size:13px">
     Keep this tab open. Once loaded it needs GPS but no signal, so it works in
     dead zones.
@@ -697,6 +707,54 @@ function toast(msg) {
   setTimeout(() => t.classList.remove("show"), 3800);
 }
 
+// ---- demo ------------------------------------------------------------------
+
+// Replays a real road from the bundle at a plausible pace, feeding synthetic
+// fixes through the SAME onFix path the GPS uses. Nothing about the matcher,
+// scheduler or map is special-cased, so what you see is what rides.
+let demoTimer = null;
+
+function startDemo() {
+  if ("speechSynthesis" in window) {
+    speechSynthesis.speak(new SpeechSynthesisUtterance("Demo ride"));
+  }
+  // Pick the longest fully-rated road, so the demo shows the real thing.
+  let pick = 0, best = -1;
+  BUNDLE.roads.forEach((r, i) => {
+    const L = r.node_s[r.node_s.length - 1];
+    if (r.rated !== false && r.callouts.length > 8 && L > best) { best = L; pick = i; }
+  });
+  const road = BUNDLE.roads[pick];
+  document.body.classList.add("riding");
+  requestAnimationFrame(() => { sizeMap(); });
+  setFix("live", "Demo ride — not your position");
+  el("toast").textContent = "Demo: " + (road.name || "road");
+  el("toast").classList.add("show");
+  setTimeout(() => el("toast").classList.remove("show"), 3000);
+
+  let k = 1;
+  const SPEED = 19;          // m/s, about 68 km/h
+  const STEP_MS = 200;
+  demoTimer = setInterval(() => {
+    const ns = road.node_s;
+    const target = (k * SPEED * STEP_MS) / 1000;
+    if (target >= ns[ns.length - 1]) { endRide(); return; }
+    let i = 0;
+    while (i < ns.length - 2 && ns[i + 1] < target) i++;
+    const f = (target - ns[i]) / Math.max(ns[i + 1] - ns[i], 1e-6);
+    const lon = road.lon[i] + f * (road.lon[i + 1] - road.lon[i]);
+    const lat = road.lat[i] + f * (road.lat[i + 1] - road.lat[i]);
+    const dx = (road.lon[i + 1] - road.lon[i]) * MLON;
+    const dy = (road.lat[i + 1] - road.lat[i]) * MLAT;
+    // onFix wants a GPS-style heading: degrees clockwise from north.
+    const bearing = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+    onFix({ coords: { longitude: lon, latitude: lat, accuracy: 5,
+                      speed: SPEED, heading: bearing },
+            timestamp: Date.now() });
+    k++;
+  }, STEP_MS);
+}
+
 // ---- lifecycle -----------------------------------------------------------
 
 async function startRide() {
@@ -719,6 +777,7 @@ async function startRide() {
 }
 
 function endRide() {
+  if (demoTimer !== null) { clearInterval(demoTimer); demoTimer = null; }
   if (watchId !== null) navigator.geolocation.clearWatch(watchId);
   watchId = null;
   if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
@@ -745,6 +804,7 @@ document.querySelectorAll(".mode").forEach(b => {
 });
 
 el("start").addEventListener("click", startRide);
+el("demo").addEventListener("click", startDemo);
 el("stop").addEventListener("click", endRide);
 el("mute").addEventListener("click", () => {
   muted = !muted;
