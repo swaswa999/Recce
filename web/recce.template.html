@@ -265,6 +265,9 @@
         within your sight lines and the law.</li>
       <li>Callouts can be late, missing, or about the wrong corner, especially
         where GPS is poor.</li>
+      <li>On roads mapped too sparsely to rate, it says only which way the
+        corner goes and how far — no severity. Those show as
+        <em>direction only</em>.</li>
       <li>Start it while stopped. Don't look at or touch the screen while
         moving.</li>
     </ul>
@@ -422,9 +425,20 @@ function commitRoad(ri) {
     // would silence the new road's callouts as "already said".
     spoken.clear();
     dir = 0;
-    el("roadnow").textContent = BUNDLE.roads[ri].name || "unnamed road";
+    const R = BUNDLE.roads[ri];
+    el("roadnow").textContent = (R.name || "unnamed road")
+      + (R.rated === false ? "  ·  direction only" : "");
+    el("roadnow").style.color = R.rated === false
+      ? "var(--muted)" : "var(--amber)";
   }
   challenger = null; challengerHits = 0;
+}
+
+// Round a distance the way a co-driver would, mirroring script_gen.dist_call.
+function distCall(m) {
+  for (const step of [50, 100, 150, 200, 300, 400, 600, 800])
+    if (m < step * 1.25) return step;
+  return Math.round(m / 200) * 200;
 }
 
 function eligible(c) {
@@ -508,15 +522,23 @@ function onFix(pos) {
   const gap = Math.abs(next.s - s);
   const eta = smoothSpeed > 1 ? gap / smoothSpeed : Infinity;
 
-  el("calltext").className = next.warn ? "warn" : "";
-  el("calltext").textContent = next.text;
+  el("calltext").className = next.warn ? "warn" : (next.rated === false ? "idle" : "");
+  el("calltext").textContent = next.rated === false
+    ? next.text + " ahead" : next.text;
   el("dist").innerHTML = Math.round(gap) + "<span>m</span>";
 
-  const speakSecs = Math.max(0.6, next.text.split(" ").length / 2.2);
+  // An unrated road gives direction only, so pair it with a distance — "right,
+  // in 150" carries more than a bare "right", and the distance is one thing
+  // sparse geometry still supports. Computed live, so it is the real distance
+  // at the moment of speaking rather than a number baked in at build time.
+  let phrase = next.text;
+  if (next.rated === false) phrase = next.text + ", in " + distCall(gap);
+
+  const speakSecs = Math.max(0.6, phrase.split(" ").length / 2.2);
   if (eta <= LEAD_SECONDS + speakSecs && eta <= MAX_LOOKAHEAD_S) {
     spoken.add(next.s);
-    say(next.text, next.warn);
-    logSpoken(next.text, next.warn);
+    say(phrase, next.warn);
+    logSpoken(phrase, next.warn);
   }
 }
 

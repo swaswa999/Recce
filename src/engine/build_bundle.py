@@ -25,6 +25,20 @@ from pipeline import analyze
 from timing import build_callouts
 from survey import RIDEABLE, MAX_TRUSTED_MEDIAN_SPACING
 
+# Three tiers, measured by decimating synth_stress.py at 16 phases per spacing:
+#
+#   <= 25 m   full callouts. Direction, severity and shape all hold.
+#   25-40 m   DIRECTION ONLY. Direction is still perfect at 35 m and 40 m while
+#             severity starts reading optimistic at 40 m, so "there is a right
+#             here" is true and "it is a 3" is not.
+#   >  40 m   nothing. Direction itself starts flipping (4 of 80 wrong at 50 m)
+#             and corners go missing entirely, so there is no honest callout left.
+#
+# The point of the middle tier is that silence is not the only alternative to a
+# full callout. A rider told a corner exists, without a number, still gets to
+# roll off — and a number withheld cannot be an optimistic number.
+MAX_DIRECTION_ONLY_SPACING = 40.0
+
 # Grid cell for the spatial index, in degrees. ~1.1 km at this latitude, so a
 # fix plus its eight neighbours covers everything within ~1.5 km — far more than
 # GPS error, and small enough that a cell holds only a handful of segments.
@@ -97,8 +111,10 @@ def road_from_chain(name, chain, with_elevation=True):
         return None
 
     gaps = np.diff(node_s)
-    if float(np.median(gaps)) > MAX_TRUSTED_MEDIAN_SPACING:
+    median_gap = float(np.median(gaps))
+    if median_gap > MAX_DIRECTION_ONLY_SPACING:
         return None
+    rated = median_gap <= MAX_TRUSTED_MEDIAN_SPACING
 
     ele = None
     if with_elevation:
@@ -115,24 +131,39 @@ def road_from_chain(name, chain, with_elevation=True):
     if not corners:
         return None
 
-    from features import road_features
-    feats = road_features({"structure": structure, "points": []}, node_s)
-    callouts = build_callouts(corners, loose, features=feats)
-    if not callouts:
+    if rated:
+        from features import road_features
+        feats = road_features({"structure": structure, "points": []}, node_s)
+        callouts = build_callouts(corners, loose, features=feats)
+        out_calls = [
+            {"s": round(float(c.anchor_s), 1), "text": c.text, "kind": c.kind,
+             "rank": 0 if c.severity == "hairpin" else (
+                 c.severity if isinstance(c.severity, int) else 9),
+             "warn": bool(c.is_warning), "rated": True}
+            for c in callouts
+        ]
+    else:
+        # Direction only. No severity, no shape, no crest — nothing whose
+        # magnitude this geometry cannot support. Rank 0 so no verbosity mode
+        # can suppress them: an unrated corner is the LEAST described, and
+        # dropping it too would leave the rider with nothing at all.
+        out_calls = [
+            {"s": round(float(c.s0), 1),
+             "text": "left" if c.direction == "L" else "right",
+             "kind": "corner", "rank": 0, "warn": False, "rated": False}
+            for c in corners
+        ]
+    if not out_calls:
         return None
 
     return {
         "name": name,
+        "rated": rated,
+        "node_gap": round(median_gap, 1),
         "lon": [round(float(v), 5) for v in lon],
         "lat": [round(float(v), 5) for v in lat],
         "node_s": [round(float(v), 1) for v in node_s],
-        "callouts": [
-            {"s": round(float(c.anchor_s), 1), "text": c.text, "kind": c.kind,
-             "rank": 0 if c.severity == "hairpin" else (
-                 c.severity if isinstance(c.severity, int) else 9),
-             "warn": bool(c.is_warning)}
-            for c in callouts
-        ],
+        "callouts": out_calls,
     }
 
 
@@ -176,6 +207,8 @@ def main():
 
     km = sum(r["node_s"][-1] for r in roads) / 1000
     calls = sum(len(r["callouts"]) for r in roads)
+    rated = [r for r in roads if r["rated"]]
+    unrated = [r for r in roads if not r["rated"]]
     bundle = {"name": args.name, "cell": CELL, "roads": roads,
               "index": build_index(roads)}
     with open(args.out, "w") as f:
@@ -183,6 +216,11 @@ def main():
 
     import os
     print(f"\n{args.name}: {len(roads)} roads, {km:,.0f} km, {calls:,} callouts")
+    print(f"  fully rated:    {len(rated):5d} roads  "
+          f"{sum(r['node_s'][-1] for r in rated)/1000:7,.0f} km")
+    print(f"  direction only: {len(unrated):5d} roads  "
+          f"{sum(r['node_s'][-1] for r in unrated)/1000:7,.0f} km  "
+          f"(too sparse for severity)")
     print(f"  {skipped:,} chains skipped (too short, too sparse, or no corners)")
     print(f"  wrote {args.out} ({os.path.getsize(args.out)/1024/1024:.1f} MB)")
 
